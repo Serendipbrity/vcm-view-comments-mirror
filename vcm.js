@@ -1006,6 +1006,28 @@ function stripComments(text, filePath, vcmComments = [], keepPrivate = false, is
 // -----------------------------------------------------------------------------
 
 async function activate(context) {
+  // --- RESET ALL IN-MEMORY STATE ON ACTIVATE to remove stale flags ------------------------------
+  try {
+    console.log("BEFORE clearing:", {
+    isCommentedMap: Array.from(isCommentedMap.entries()),
+    privateCommentsVisible: Array.from(privateCommentsVisible.entries()),
+    justInjectedFromVCM: Array.from(justInjectedFromVCM.values())
+    });
+
+    isCommentedMap.clear();
+    privateCommentsVisible.clear();
+    justInjectedFromVCM.clear();
+
+    console.log("AFTER clearing:", {
+        isCommentedMap: Array.from(isCommentedMap.entries()),
+        privateCommentsVisible: Array.from(privateCommentsVisible.entries()),
+        justInjectedFromVCM: Array.from(justInjectedFromVCM.values())
+    });
+  } catch (err) {
+      console.warn("VCM: Failed to clear state on activate()", err);
+  }
+  // ------------------------------------------------------------------------
+
   // Load user configuration
   const config = vscode.workspace.getConfiguration("vcm");
   const autoSplit = config.get("autoSplitView", true);  // Auto-split vs same pane
@@ -1671,7 +1693,7 @@ async function activate(context) {
     // Get the current mode from our state map
     // IMPORTANT: Once mode is set, it should NEVER change except via manual toggle or undo/redo
     let isCommented = isCommentedMap.get(doc.uri.fsPath);
-
+    console.log(`activate: saveVCM for ${relativePath}, wasJustInjected=${wasJustInjected}, isCommented=${isCommented}`);
     // If state is not set, initialize it by detecting the mode
     // This only happens on first open or after a restart
     if (isCommented === undefined) {
