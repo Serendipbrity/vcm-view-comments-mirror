@@ -11,7 +11,6 @@ const vscode = require("vscode"); // vs code api module. lets us talk to and con
 const crypto = require("crypto"); // for generating hashes
 
 // Global state variables for the extension
-let vcmStatus;           // Status bar item showing VCM state
 let vcmEditor;           // Reference to the VCM split view editor
 let tempUri;             // URI for the temporary VCM view document
 let scrollListener;      // Event listener for cursor movement between panes
