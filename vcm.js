@@ -1330,11 +1330,32 @@ async function activate(context) {
   // Save comments, splitting them into shared and private files
   // onlyUpdateExisting: if true, only update existing VCM files, don't create new ones
   async function saveCommentsToVCM(relativePath, comments, onlyUpdateExisting = false) {
-    const sharedComments = comments.filter(c => !c.isPrivate);
-    const privateComments = comments.filter(c => c.isPrivate).map(c => {
+    // Filter comments into shared and private
+    // A comment goes to PRIVATE if:
+    //   - The entire comment has isPrivate flag, OR
+    //   - For blocks: ANY line has isPrivate
+    // Everything else goes to SHARED
+
+    // First, identify which comments should go to private
+    const shouldBePrivate = (c) => {
+      // If entire comment is private, include it
+      if (c.isPrivate) return true;
+
+      // For block comments, include if any line is private
+      if (c.type === 'block' && c.block) {
+        return c.block.some(line => line.isPrivate);
+      }
+
+      return false;
+    };
+
+    const privateComments = comments.filter(shouldBePrivate).map(c => {
       const { isPrivate, ...rest } = c;
       return rest; // Remove isPrivate flag when saving to private file
     });
+
+    // Shared comments = everything NOT going to private
+    const sharedComments = comments.filter(c => !shouldBePrivate(c));
 
     // Save shared comments (only if there are shared comments or a shared VCM file already exists)
     const sharedExists = await vcmFileExists(vcmDir, relativePath);
@@ -1451,8 +1472,11 @@ async function activate(context) {
 
         // Index by text to handle anchor changes (store array to handle duplicates)
         const textKey = existing.text || (existing.block ? existing.block.map(b => b.text).join('\n') : '');
-        if (textKey && !existingByText.has(textKey)) {
-          existingByText.set(textKey, existing);
+        if (textKey) {
+          if (!existingByText.has(textKey)) {
+            existingByText.set(textKey, []);
+          }
+          existingByText.get(textKey).push(existing);
         }
       }
 
@@ -1468,10 +1492,13 @@ async function activate(context) {
         }
         otherByKey.get(key).push(otherComment);
 
-        // Index by text
+        // Index by text (store array to handle duplicates)
         const textKey = otherComment.text || (otherComment.block ? otherComment.block.map(b => b.text).join('\n') : '');
-        if (textKey && !otherByText.has(textKey)) {
-          otherByText.set(textKey, otherComment);
+        if (textKey) {
+          if (!otherByText.has(textKey)) {
+            otherByText.set(textKey, []);
+          }
+          otherByText.get(textKey).push(otherComment);
         }
       }
 
