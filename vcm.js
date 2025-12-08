@@ -988,26 +988,47 @@ function stripComments(text, filePath, vcmComments = [], keepPrivate = false, is
         allCommentBlockLines.add(blockLine.originalLineIndex);
       }
 
-      // If this block is alwaysShow, also add to alwaysShow set
-      if (alwaysShowAnchors.has(current.anchor)) {
-        for (const blockLine of current.block) {
+      // Check if entire block is marked as alwaysShow/private (legacy/fallback)
+      const blockIsAlwaysShow = alwaysShowByAnchor.has(current.anchor);
+      const blockIsPrivate = privateByAnchor.has(current.anchor);
+
+      // Get the set of line texts that are marked for this specific block
+      const markedAlwaysShowLines = alwaysShowBlockLines.get(current.anchor);
+      const markedPrivateLines = privateBlockLines.get(current.anchor);
+
+      // Check each line individually
+      for (const blockLine of current.block) {
+        const lineText = blockLine.text || '';
+
+        // Check if this specific line is marked as alwaysShow
+        // Either the entire block is marked, OR this specific line is in the marked set
+        const lineIsAlwaysShow = blockIsAlwaysShow || (markedAlwaysShowLines && markedAlwaysShowLines.has(lineText));
+        if (lineIsAlwaysShow) {
           alwaysShowLines.add(blockLine.originalLineIndex);
         }
-      }
 
-      // If this block is private and we're keeping private, add to private set
-      if (privateAnchors.has(current.anchor)) {
-        for (const blockLine of current.block) {
+        // Check if this specific line is marked as private
+        const lineIsPrivate = blockIsPrivate || (markedPrivateLines && markedPrivateLines.has(lineText));
+        if (lineIsPrivate) {
           privateLines.add(blockLine.originalLineIndex);
         }
       }
     } else if (current.type === "inline") {
-      if (alwaysShowAnchors.has(current.anchor)) {
+      const currentText = current.text || '';
+
+      // Check alwaysShow by anchor OR text
+      const isAlwaysShow = alwaysShowByAnchor.has(current.anchor) ||
+                          (currentText && alwaysShowByText.has(currentText));
+      if (isAlwaysShow) {
         // For alwaysShow inline comments, store the line index and text
         alwaysShowLines.add(current.originalLineIndex);
         alwaysShowInlineComments.set(current.originalLineIndex, current.text || "");
       }
-      if (privateAnchors.has(current.anchor)) {
+
+      // Check private by anchor OR text
+      const isPrivate = privateByAnchor.has(current.anchor) ||
+                       (currentText && privateByText.has(currentText));
+      if (isPrivate) {
         // For private inline comments (if keeping), store the line index and text
         privateLines.add(current.originalLineIndex);
         privateInlineComments.set(current.originalLineIndex, current.text || "");
