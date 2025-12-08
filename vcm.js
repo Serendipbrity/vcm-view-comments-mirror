@@ -799,8 +799,22 @@ function injectComments(cleanText, comments, includePrivate = false) {
           linesToInject = [];
         }
 
-        // Inject all lines from the block (includes leading blanks, comments, and trailing blanks)
-        for (const lineObj of linesToInject) {
+        // Filter out lines that are marked as alwaysShow or isPrivate (they're already in the document)
+        // Only inject lines that are NOT marked
+        const filteredLines = linesToInject.filter(lineObj => {
+          // If includePrivate is false, don't inject private lines
+          if (!includePrivate && lineObj.isPrivate) {
+            return false;
+          }
+          // Don't inject alwaysShow lines (they're managed separately and already visible)
+          if (lineObj.alwaysShow) {
+            return false;
+          }
+          return true;
+        });
+
+        // Inject filtered lines from the block
+        for (const lineObj of filteredLines) {
           result.push(lineObj.text);
         }
       }
