@@ -917,15 +917,55 @@ function stripComments(text, filePath, vcmComments = [], keepPrivate = false, is
     return -1; // No comment found
   };
 
-  // Build sets of comment anchor hashes that should be kept
-  const alwaysShowAnchors = new Set();
-  const privateAnchors = new Set();
+  // Build maps of comment anchor + line info to metadata
+  // For blocks, we track individual lines by anchor + line index/text
+  const alwaysShowByAnchor = new Set();
+  const alwaysShowByText = new Map();
+  const privateByAnchor = new Set();
+  const privateByText = new Map();
+  const alwaysShowBlockLines = new Map(); // anchor -> Set of line texts that are alwaysShow
+  const privateBlockLines = new Map(); // anchor -> Set of line texts that are private
+
   for (const comment of vcmComments) {
-    if (comment.alwaysShow) {
-      alwaysShowAnchors.add(comment.anchor);
-    }
-    if (comment.isPrivate && keepPrivate) {
-      privateAnchors.add(comment.anchor);
+    if (comment.type === 'inline') {
+      const textKey = comment.text || '';
+
+      if (comment.alwaysShow) {
+        alwaysShowByAnchor.add(comment.anchor);
+        if (textKey) {
+          alwaysShowByText.set(textKey, true);
+        }
+      }
+      if (comment.isPrivate && keepPrivate) {
+        privateByAnchor.add(comment.anchor);
+        if (textKey) {
+          privateByText.set(textKey, true);
+        }
+      }
+    } else if (comment.type === 'block' && comment.block) {
+      // For blocks, track individual lines by anchor + line text
+      for (const line of comment.block) {
+        if (line.alwaysShow) {
+          if (!alwaysShowBlockLines.has(comment.anchor)) {
+            alwaysShowBlockLines.set(comment.anchor, new Set());
+          }
+          alwaysShowBlockLines.get(comment.anchor).add(line.text);
+        }
+        if (line.isPrivate && keepPrivate) {
+          if (!privateBlockLines.has(comment.anchor)) {
+            privateBlockLines.set(comment.anchor, new Set());
+          }
+          privateBlockLines.get(comment.anchor).add(line.text);
+        }
+      }
+
+      // Also check if the entire block is marked (legacy/fallback)
+      if (comment.alwaysShow) {
+        alwaysShowByAnchor.add(comment.anchor);
+      }
+      if (comment.isPrivate && keepPrivate) {
+        privateByAnchor.add(comment.anchor);
+      }
     }
   }
 
