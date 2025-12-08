@@ -1694,21 +1694,25 @@ async function activate(context) {
           // Match by text first (handles when comment moves)
           let existing = null;
           if (currentText && existingByText.has(currentText)) {
-            const candidate = existingByText.get(currentText);
-            if (!matchedExisting.has(candidate)) {
-              existing = candidate;
-              matchedExisting.add(existing);
-              // Update anchor to new position
-              existing.anchor = current.anchor;
-              existing.prevHash = current.prevHash;
-              existing.nextHash = current.nextHash;
-              existing.originalLineIndex = current.originalLineIndex;
-              // Update content
-              existing.text = current.text;
-              existing.block = current.block;
-              // Update anchorText
-              if (current.anchorText !== undefined) {
-                existing.anchorText = current.anchorText;
+            const candidates = existingByText.get(currentText);
+            // Find first unmatched candidate
+            for (const candidate of candidates) {
+              if (!matchedExisting.has(candidate)) {
+                existing = candidate;
+                matchedExisting.add(existing);
+                // Update anchor to new position
+                existing.anchor = current.anchor;
+                existing.prevHash = current.prevHash;
+                existing.nextHash = current.nextHash;
+                existing.originalLineIndex = current.originalLineIndex;
+                // Update content
+                existing.text = current.text;
+                existing.block = current.block;
+                // Update anchorText
+                if (current.anchorText !== undefined) {
+                  existing.anchorText = current.anchorText;
+                }
+                break; // Found and updated, stop looking
               }
             }
           }
@@ -1792,14 +1796,18 @@ async function activate(context) {
 
           // First, try to match by text_cleanMode content (handles anchor changes)
           if (currentText && existingByTextCleanMode.has(currentText)) {
-            const candidate = existingByTextCleanMode.get(currentText);
-            if (!matchedInCleanMode.has(candidate)) {
-              existing = candidate;
-              matchedInCleanMode.add(existing);
-              // Update anchor to new position (comment moved with code)
-              existing.anchor = current.anchor;
-              existing.prevHash = current.prevHash;
-              existing.nextHash = current.nextHash;
+            const candidates = existingByTextCleanMode.get(currentText);
+            // Find first unmatched candidate
+            for (const candidate of candidates) {
+              if (!matchedInCleanMode.has(candidate)) {
+                existing = candidate;
+                matchedInCleanMode.add(existing);
+                // Update anchor to new position (comment moved with code)
+                existing.anchor = current.anchor;
+                existing.prevHash = current.prevHash;
+                existing.nextHash = current.nextHash;
+                break; // Found and updated, stop looking
+              }
             }
           }
 
