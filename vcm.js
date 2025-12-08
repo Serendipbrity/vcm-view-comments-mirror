@@ -1556,6 +1556,31 @@ async function activate(context) {
           if (candidates.length === 0) {
             existingByKey.delete(key);
           }
+
+          // For block comments, preserve line-level properties
+          if (current.type === 'block' && current.block && existing.block) {
+            const mergedBlock = current.block.map(currentLine => {
+              // Try to find matching line in existing by originalLineIndex or text
+              const existingLine = existing.block.find(
+                el => el.originalLineIndex === currentLine.originalLineIndex || el.text === currentLine.text
+              );
+              if (existingLine) {
+                return {
+                  ...currentLine,
+                  alwaysShow: existingLine.alwaysShow || undefined,
+                  isPrivate: existingLine.isPrivate || undefined,
+                };
+              }
+              return currentLine;
+            });
+
+            return {
+              ...current,
+              block: mergedBlock,
+              alwaysShow: existing.alwaysShow || undefined,
+            };
+          }
+
           return {
             ...current,
             alwaysShow: existing.alwaysShow || undefined,
@@ -1565,13 +1590,39 @@ async function activate(context) {
 
         // No match by anchor - try matching by text (anchor might have changed)
         if (currentText && existingByText.has(currentText)) {
-          const existing = existingByText.get(currentText);
-          if (!matchedExisting.has(existing)) {
-            matchedExisting.add(existing);
-            return {
-              ...current,
-              alwaysShow: existing.alwaysShow || undefined,
-            };
+          const candidates = existingByText.get(currentText);
+          // Find first unmatched candidate
+          for (const existing of candidates) {
+            if (!matchedExisting.has(existing)) {
+              matchedExisting.add(existing);
+
+              // For block comments, preserve line-level properties
+              if (current.type === 'block' && current.block && existing.block) {
+                const mergedBlock = current.block.map(currentLine => {
+                  // Try to find matching line in existing by text
+                  const existingLine = existing.block.find(el => el.text === currentLine.text);
+                  if (existingLine) {
+                    return {
+                      ...currentLine,
+                      alwaysShow: existingLine.alwaysShow || undefined,
+                      isPrivate: existingLine.isPrivate || undefined,
+                    };
+                  }
+                  return currentLine;
+                });
+
+                return {
+                  ...current,
+                  block: mergedBlock,
+                  alwaysShow: existing.alwaysShow || undefined,
+                };
+              }
+
+              return {
+                ...current,
+                alwaysShow: existing.alwaysShow || undefined,
+              };
+            }
           }
         }
 
@@ -1615,12 +1666,15 @@ async function activate(context) {
         // PRIVATE MODE IN CLEAN: Update anchors by matching text (like shared)
         // ====================================================================
 
-        // Build map by text for matching
+        // Build map by text for matching (store array to handle duplicates)
         const existingByText = new Map();
         for (const existing of existingComments) {
           const textKey = existing.text || (existing.block ? existing.block.map(b => b.text).join('\n') : '');
-          if (textKey && !existingByText.has(textKey)) {
-            existingByText.set(textKey, existing);
+          if (textKey) {
+            if (!existingByText.has(textKey)) {
+              existingByText.set(textKey, []);
+            }
+            existingByText.get(textKey).push(existing);
           }
         }
 
@@ -2416,14 +2470,35 @@ async function activate(context) {
             targetComment = candidates[0];
           } else {
             // Multiple comments with same anchor - use line number to disambiguate
-            targetComment = candidates.find(c => c.originalLineIndex === selectedLine);
+            targetComment = candidates.find(c => {
+              if (c.type === 'inline') {
+                return c.originalLineIndex === selectedLine;
+              } else if (c.type === 'block' && c.block) {
+                // For blocks, check if selectedLine is within the block
+                return c.block.some(b => b.originalLineIndex === selectedLine);
+              }
+              return false;
+            });
             if (!targetComment) {
               targetComment = candidates[0]; // Fallback to first match
             }
           }
 
-          // Only add the specific comment being marked as always show
-          targetComment.alwaysShow = true;
+          // Mark as always show
+          if (targetComment.type === 'inline') {
+            // For inline comments, mark the comment itself
+            targetComment.alwaysShow = true;
+          } else if (targetComment.type === 'block' && targetComment.block) {
+            // For block comments, mark only the specific line that was clicked
+            const lineInBlock = targetComment.block.find(b => b.originalLineIndex === selectedLine);
+            if (lineInBlock) {
+              lineInBlock.alwaysShow = true;
+            } else {
+              // Fallback: mark all lines in block
+              targetComment.alwaysShow = true;
+            }
+          }
+
           comments = [targetComment];
         } else {
           // VCM exists - mark the comment in existing list using context matching
@@ -2438,8 +2513,16 @@ async function activate(context) {
             return;
           }
 
-          // Find the current comment at the selected line
-          let currentComment = currentCandidates.find(c => c.originalLineIndex === selectedLine);
+          // Find the current comment at the selected line (handle both inline and block)
+          let currentComment = currentCandidates.find(c => {
+            if (c.type === 'inline') {
+              return c.originalLineIndex === selectedLine;
+            } else if (c.type === 'block' && c.block) {
+              // For blocks, check if selectedLine is within the block
+              return c.block.some(b => b.originalLineIndex === selectedLine);
+            }
+            return false;
+          });
           if (!currentComment && currentCandidates.length > 0) {
             currentComment = currentCandidates[0]; // Fallback
           }
@@ -2471,13 +2554,49 @@ async function activate(context) {
             targetVcmComment = bestMatch || vcmCandidates[0];
           } else {
             // Comment not found in existing VCM - add it as a new entry with alwaysShow
-            currentComment.alwaysShow = true;
+            if (currentComment.type === 'inline') {
+              currentComment.alwaysShow = true;
+            } else if (currentComment.type === 'block' && currentComment.block) {
+              // Mark only the specific line that was clicked
+              const lineInBlock = currentComment.block.find(b => b.originalLineIndex === selectedLine);
+              if (lineInBlock) {
+                lineInBlock.alwaysShow = true;
+              } else {
+                // Fallback: mark the entire block
+                currentComment.alwaysShow = true;
+              }
+            }
             comments.push(currentComment);
             targetVcmComment = null; // Mark that we added it, so we don't try to modify it below
           }
 
           if (targetVcmComment) {
-            targetVcmComment.alwaysShow = true;
+            // Check if comment is already marked as private
+            let isPrivate = false;
+            if (targetVcmComment.type === 'inline') {
+              isPrivate = targetVcmComment.isPrivate;
+            } else if (targetVcmComment.type === 'block' && targetVcmComment.block) {
+              const lineInBlock = targetVcmComment.block.find(b => b.originalLineIndex === selectedLine);
+              isPrivate = lineInBlock?.isPrivate || targetVcmComment.isPrivate;
+            }
+
+            if (isPrivate) {
+              vscode.window.showWarningMessage("VCM: Cannot mark as 'Always Show' - comment is already marked as Private. Unmark Private first.");
+              return;
+            }
+
+            if (targetVcmComment.type === 'inline') {
+              targetVcmComment.alwaysShow = true;
+            } else if (targetVcmComment.type === 'block' && targetVcmComment.block) {
+              // Mark only the specific line that was clicked
+              const lineInBlock = targetVcmComment.block.find(b => b.originalLineIndex === selectedLine);
+              if (lineInBlock) {
+                lineInBlock.alwaysShow = true;
+              } else {
+                // Fallback: mark the entire block
+                targetVcmComment.alwaysShow = true;
+              }
+            }
           }
         }
 
@@ -2597,11 +2716,24 @@ async function activate(context) {
         }
 
         // Search for comment with this anchor and remove alwaysShow
+        // For block comments, need to check individual lines
         let found = false;
         for (const c of comments) {
-          if (c.anchor === anchorHash && c.alwaysShow) {
-            delete c.alwaysShow;
-            found = true;
+          if (c.anchor === anchorHash) {
+            // Check if entire comment is marked
+            if (c.alwaysShow) {
+              delete c.alwaysShow;
+              found = true;
+            }
+
+            // For block comments, check individual lines
+            if (c.type === 'block' && c.block) {
+              const lineInBlock = c.block.find(b => b.originalLineIndex === selectedLine);
+              if (lineInBlock && lineInBlock.alwaysShow) {
+                delete lineInBlock.alwaysShow;
+                found = true;
+              }
+            }
           }
         }
 
@@ -2742,7 +2874,18 @@ async function activate(context) {
 
         if (allComments.length === 0) {
           // No VCM exists - add only this comment to VCM, marked as private
-          commentAtCursor.isPrivate = true;
+          if (commentAtCursor.type === 'block' && commentAtCursor.block) {
+            // Mark only the specific line that was clicked
+            const lineInBlock = commentAtCursor.block.find(b => b.originalLineIndex === selectedLine);
+            if (lineInBlock) {
+              lineInBlock.isPrivate = true;
+            } else {
+              // Fallback: mark the entire block
+              commentAtCursor.isPrivate = true;
+            }
+          } else {
+            commentAtCursor.isPrivate = true;
+          }
           comments = [commentAtCursor];
         } else {
           // VCM exists - find and mark the matching comment using ALL hashes + text
@@ -2763,10 +2906,46 @@ async function activate(context) {
 
           if (!targetVcmComment) {
             // Comment not found in existing VCM - add it as a new private comment
-            commentAtCursor.isPrivate = true;
+            if (commentAtCursor.type === 'block' && commentAtCursor.block) {
+              // Mark only the specific line that was clicked
+              const lineInBlock = commentAtCursor.block.find(b => b.originalLineIndex === selectedLine);
+              if (lineInBlock) {
+                lineInBlock.isPrivate = true;
+              } else {
+                // Fallback: mark the entire block
+                commentAtCursor.isPrivate = true;
+              }
+            } else {
+              commentAtCursor.isPrivate = true;
+            }
             comments.push(commentAtCursor);
           } else {
-            targetVcmComment.isPrivate = true;
+            // Check if comment is already marked as alwaysShow
+            let isAlwaysShow = false;
+            if (targetVcmComment.type === 'inline') {
+              isAlwaysShow = targetVcmComment.alwaysShow;
+            } else if (targetVcmComment.type === 'block' && targetVcmComment.block) {
+              const lineInBlock = targetVcmComment.block.find(b => b.originalLineIndex === selectedLine);
+              isAlwaysShow = lineInBlock?.alwaysShow || targetVcmComment.alwaysShow;
+            }
+
+            if (isAlwaysShow) {
+              vscode.window.showWarningMessage("VCM: Cannot mark as Private - comment is already marked as 'Always Show'. Unmark Always Show first.");
+              return;
+            }
+
+            // Mark the specific line within the block comment, not the entire block
+            if (targetVcmComment.type === 'block' && targetVcmComment.block) {
+              const lineInBlock = targetVcmComment.block.find(b => b.originalLineIndex === selectedLine);
+              if (lineInBlock) {
+                lineInBlock.isPrivate = true;
+              } else {
+                // Fallback: mark the entire block
+                targetVcmComment.isPrivate = true;
+              }
+            } else {
+              targetVcmComment.isPrivate = true;
+            }
           }
         }
 
@@ -2942,7 +3121,20 @@ async function activate(context) {
         }
 
         // Match to VCM comment using context
-        const vcmCandidates = comments.filter(c => c.anchor === anchorHash && c.isPrivate);
+        // For blocks, check if any line within the block is private
+        const vcmCandidates = comments.filter(c => {
+          if (c.anchor !== anchorHash) return false;
+
+          // Check if entire comment is private
+          if (c.isPrivate) return true;
+
+          // For block comments, check if any line is private
+          if (c.type === 'block' && c.block) {
+            return c.block.some(line => line.isPrivate);
+          }
+
+          return false;
+        });
 
         if (vcmCandidates.length === 0) {
           vscode.window.showWarningMessage("VCM: This comment is not marked as private.");
@@ -2977,8 +3169,19 @@ async function activate(context) {
           targetVcmComment = bestMatch || vcmCandidates[0];
         }
 
-        // Remove isPrivate flag
-        delete targetVcmComment.isPrivate;
+        // Remove isPrivate flag from the specific line (if block comment) or entire comment
+        if (targetVcmComment.type === 'block' && targetVcmComment.block) {
+          // Find and unmark the specific line that was clicked
+          const lineInBlock = targetVcmComment.block.find(b => b.originalLineIndex === selectedLine);
+          if (lineInBlock && lineInBlock.isPrivate) {
+            delete lineInBlock.isPrivate;
+          } else {
+            // Fallback: remove from entire block
+            delete targetVcmComment.isPrivate;
+          }
+        } else {
+          delete targetVcmComment.isPrivate;
+        }
 
         // Save updated comments (only update existing VCM)
         await saveCommentsToVCM(relativePath, comments, true);
@@ -3001,11 +3204,21 @@ async function activate(context) {
 
           if (matchingComment) {
             if (matchingComment.type === "block" && matchingComment.block) {
-              // Remove all lines in the block (from first to last)
-              const firstLine = Math.min(...matchingComment.block.map(b => b.originalLineIndex));
-              const lastLine = Math.max(...matchingComment.block.map(b => b.originalLineIndex));
-              const range = new vscode.Range(firstLine, 0, lastLine + 1, 0);
-              edit.delete(doc.uri, range);
+              // Check if we removed isPrivate from a single line or the entire block
+              const removedFromSingleLine = targetVcmComment.block &&
+                targetVcmComment.block.find(b => b.originalLineIndex === selectedLine);
+
+              if (removedFromSingleLine) {
+                // Only remove the specific line that was unmarked
+                const range = new vscode.Range(selectedLine, 0, selectedLine + 1, 0);
+                edit.delete(doc.uri, range);
+              } else {
+                // Remove all lines in the block (entire block was unmarked)
+                const firstLine = Math.min(...matchingComment.block.map(b => b.originalLineIndex));
+                const lastLine = Math.max(...matchingComment.block.map(b => b.originalLineIndex));
+                const range = new vscode.Range(firstLine, 0, lastLine + 1, 0);
+                edit.delete(doc.uri, range);
+              }
             } else if (matchingComment.type === "inline") {
               // Remove just the inline comment part (keep the code)
               const lineText = lines[matchingComment.originalLineIndex];
