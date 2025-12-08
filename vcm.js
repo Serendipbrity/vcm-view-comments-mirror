@@ -1743,15 +1743,18 @@ async function activate(context) {
         // SHARED MODE IN CLEAN: Track changes via text_cleanMode
         // ====================================================================
 
-        // Build map by text_cleanMode content for matching
+        // Build map by text_cleanMode content for matching (store array to handle duplicates)
         const existingByTextCleanMode = new Map();
         for (const existing of existingComments) {
           if (existing.text_cleanMode) {
             const textKey = typeof existing.text_cleanMode === 'string'
               ? existing.text_cleanMode
               : (Array.isArray(existing.text_cleanMode) ? existing.text_cleanMode.map(b => b.text).join('\n') : '');
-            if (textKey && !existingByTextCleanMode.has(textKey)) {
-              existingByTextCleanMode.set(textKey, existing);
+            if (textKey) {
+              if (!existingByTextCleanMode.has(textKey)) {
+                existingByTextCleanMode.set(textKey, []);
+              }
+              existingByTextCleanMode.get(textKey).push(existing);
             }
           }
         }
