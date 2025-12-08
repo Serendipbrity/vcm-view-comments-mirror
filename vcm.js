@@ -26,6 +26,12 @@ let vcmSyncEnabled = true; // Flag to temporarily disable .vcm file updates duri
 // 3 Runs the constructor function, binding this to that new object.
 // 4 Returns the new object automatically.
 let isCommentedMap = new Map(); // Track state: true = comments visible, false = clean mode (comments hidden)
+// Set is a Class for storing unique values of any type
+// its a hash table
+// duplicates get auto removed
+// order of insertion is preserved
+// fast lookups. has() is O(1)
+// Hash based. Not index based/accessed
 let justInjectedFromVCM = new Set(); // Track files that just had VCM comments injected (don't re-extract)
 let privateCommentsVisible = new Map(); // Track private comment visibility per file: true = visible, false = hidden
 
