@@ -1334,6 +1334,8 @@ async function activate(context) {
     isPrivateMode = false, // boolean: true = processing private comments, false = shared
     wasJustInjected = false, // boolean: skip processing in clean mode if just injected
   }) {
+    const buildContextKey = (comment) => `${comment.type}:${comment.anchor}:${comment.prevHash || 'null'}:${comment.nextHash || 'null'}`;
+
     // If just injected in clean mode, return existing comments unchanged
     if (!isCommented && wasJustInjected) {
       return existingComments;
@@ -1350,13 +1352,13 @@ async function activate(context) {
       const existingByKey = new Map();
       const existingByText = new Map();
       for (const existing of existingComments) {
-        const key = `${existing.type}:${existing.anchor}`;
+        const key = buildContextKey(existing);
         if (!existingByKey.has(key)) {
           existingByKey.set(key, []);
         }
         existingByKey.get(key).push(existing);
 
-        // Index by text to handle anchor changes
+        // Index by text to handle anchor changes (store array to handle duplicates)
         const textKey = existing.text || (existing.block ? existing.block.map(b => b.text).join('\n') : '');
         if (textKey && !existingByText.has(textKey)) {
           existingByText.set(textKey, existing);
@@ -1366,8 +1368,10 @@ async function activate(context) {
       // Build map of "other" comments (private if processing shared, shared if processing private)
       const otherByKey = new Map();
       const otherByText = new Map();
+      const matchedOther = new Set();
+
       for (const otherComment of otherComments) {
-        const key = `${otherComment.type}:${otherComment.anchor}`;
+        const key = buildContextKey(otherComment);
         if (!otherByKey.has(key)) {
           otherByKey.set(key, []);
         }
@@ -1380,17 +1384,32 @@ async function activate(context) {
         }
       }
 
+      const claimMatch = (map, key) => {
+        const candidates = map.get(key);
+        if (!candidates || candidates.length === 0) return null;
+        const candidate = candidates.find(c => !matchedOther.has(c));
+        if (!candidate) return null;
+        matchedOther.add(candidate);
+        const remaining = candidates.filter(c => c !== candidate);
+        if (remaining.length > 0) {
+          map.set(key, remaining);
+        } else {
+          map.delete(key);
+        }
+        return candidate;
+      };
+
       // Track which existing comments we've matched
       const matchedExisting = new Set();
 
       // Process current comments and match with existing to preserve metadata
       finalComments = currentComments.map(current => {
-        const key = `${current.type}:${current.anchor}`;
+        const key = buildContextKey(current);
         const currentText = current.text || (current.block ? current.block.map(b => b.text).join('\n') : '');
 
         // Check if this comment exists in the "other" VCM (cross-contamination detection)
-        const otherCandidates = otherByKey.get(key) || [];
-        if (otherCandidates.length > 0) {
+        const otherMatch = claimMatch(otherByKey, key);
+        if (otherMatch) {
           // This comment belongs to the other VCM - mark it appropriately
           return {
             ...current,
@@ -1400,10 +1419,13 @@ async function activate(context) {
 
         // Also check by text in case anchor changed
         if (currentText && otherByText.has(currentText)) {
-          return {
-            ...current,
-            isPrivate: !isPrivateMode,
-          };
+          const otherMatchByText = claimMatch(otherByText, currentText);
+          if (otherMatchByText) {
+            return {
+              ...current,
+              isPrivate: !isPrivateMode,
+            };
+          }
         }
 
         // Not from other VCM - check this VCM's existing comments for metadata
