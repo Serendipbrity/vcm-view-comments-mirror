@@ -595,8 +595,25 @@ function injectComments(cleanText, comments, includePrivate = false) {
 
   // Include/exclude private comments based on if includePrivate is toggled on or off
   const commentsToInject = comments.filter(c => {
-    if (c.alwaysShow) return false; // Always exclude alwaysShow (managed separately)
-    if (c.isPrivate && !includePrivate) return false; // Exclude private if not explicitly included
+    // Exclude comments with entire comment marked as alwaysShow
+    if (c.alwaysShow) return false;
+
+    // For block comments, check if ALL lines are marked as alwaysShow
+    // (individual line filtering happens during injection)
+    if (c.type === 'block' && c.block) {
+      const allLinesAlwaysShow = c.block.every(line => line.alwaysShow);
+      if (allLinesAlwaysShow) return false;
+
+      // If not including private, exclude blocks where ALL lines are private
+      if (!includePrivate) {
+        const allLinesPrivate = c.block.every(line => line.isPrivate);
+        if (allLinesPrivate) return false;
+      }
+    }
+
+    // Exclude comments with entire comment marked as private (if not including private)
+    if (c.isPrivate && !includePrivate) return false;
+
     return true;
   });
 
