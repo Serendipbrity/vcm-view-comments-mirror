@@ -49,7 +49,18 @@ let privateCommentsVisible = new Map(); // Track private comment visibility per 
 // Extension Activate
 // -----------------------------------------------------------------------------
 
+// Capture a fresh timestamp for each activation so logs show when the extension loaded
+const buildTag = (() => {
+  const iso = new Date().toISOString().slice(0, 16); // YYYY-MM-DDTHH:MM
+  return iso.replace("T", "-");
+})();
+
 async function activate(context) {
+  console.log("VCM ACTIVATE", {
+    buildTag,
+    cwd: process.cwd(),
+    extensionPath: context.extensionPath,
+  });
   // --- RESET ALL IN-MEMORY STATE ON ACTIVATE to remove stale flags ------------------------------
   try {
     console.log("BEFORE clearing:", {
@@ -405,6 +416,13 @@ async function activate(context) {
   // allowCreate: if true, allows creating new VCM files (used by explicit user actions)
   // ============================================================================
   async function saveVCM(doc, allowCreate = false) {
+    console.log("saveVCM()", {
+      fsPath: doc.uri.fsPath,
+      isCommented: isCommentedMap.get(doc.uri.fsPath),
+      privateVisible: privateCommentsVisible.get(doc.uri.fsPath),
+      justInjected: justInjectedFromVCM.has(doc.uri.fsPath),
+    });
+
     if (doc.uri.scheme !== "file") return;
     if (doc.uri.path.includes("/.vcm/")) return;
     if (doc.languageId === "json") return;
@@ -825,7 +843,9 @@ async function activate(context) {
       // Mark this file as now in clean mode
       isCommentedMap.set(doc.uri.fsPath, false);
       // DO NOT change privateCommentsVisible - private comment visibility persists across mode toggles
-      vscode.window.showInformationMessage("VCM: Switched to clean mode (comments hidden)");
+
+      const privateModeStr = keepPrivate ? " + PRIVATE" : "";
+      vscode.window.showInformationMessage(`VCM: Mode = CLEAN${privateModeStr}`);
     } else {
       // Currently in clean mode -> switch to commented mode (show comments)
       try {
@@ -876,7 +896,9 @@ async function activate(context) {
         // Mark that we just injected from VCM - don't re-extract on next save
         justInjectedFromVCM.add(doc.uri.fsPath);
 
-        vscode.window.showInformationMessage("VCM: Switched to commented mode (comments visible)");
+        const privateVisible = privateCommentsVisible.get(doc.uri.fsPath) === true;
+        const privateModeStr = privateVisible ? " + PRIVATE" : "";
+        vscode.window.showInformationMessage(`VCM: Mode = COMMENTED${privateModeStr}`);
       } catch {
         // No .vcm file exists yet — create one now
         isCommentedMap.set(doc.uri.fsPath, true);
@@ -896,7 +918,9 @@ async function activate(context) {
           // Mark that we just injected from VCM - don't re-extract on next save
           justInjectedFromVCM.add(doc.uri.fsPath);
 
-          vscode.window.showInformationMessage("VCM: Created new .vcm and switched to commented mode");
+          const privateVisible = privateCommentsVisible.get(doc.uri.fsPath) === true;
+          const privateModeStr = privateVisible ? " + PRIVATE" : "";
+          vscode.window.showInformationMessage(`VCM: Mode = COMMENTED${privateModeStr}`);
         } catch {
           vscode.window.showErrorMessage("VCM: Could not create .vcm data — save the file once with comments.");
           vcmSyncEnabled = true;
@@ -1556,7 +1580,8 @@ async function activate(context) {
           // Set the global state to false since we auto-hid the comment
           privateCommentsVisible.set(doc.uri.fsPath, false);
 
-          vscode.window.showInformationMessage("VCM: Private comment hidden 🔒 Toggle Private Comments to view.");
+          const modeStr = isInCommentedMode ? "COMMENTED" : "CLEAN";
+          vscode.window.showInformationMessage(`VCM: Mode = ${modeStr}, Private comment hidden 🔒`);
         } else {
           vscode.window.showInformationMessage("VCM: Marked as Private 🔒");
         }
@@ -1952,7 +1977,11 @@ async function activate(context) {
 
           newText = resultLines.join("\n");
           privateCommentsVisible.set(doc.uri.fsPath, false);
-          vscode.window.showInformationMessage("VCM: Private comments hidden 🔒");
+
+          // Show mode state after hiding private
+          const isInCommentedMode = isCommentedMap.get(doc.uri.fsPath);
+          const modeStr = isInCommentedMode ? "COMMENTED" : "CLEAN";
+          vscode.window.showInformationMessage(`VCM: Mode = ${modeStr} (private hidden) 🔒`);
         } else {
           // Show private comments - inject them back
           // Load shared comments too
@@ -1969,22 +1998,22 @@ async function activate(context) {
 
             // Inject both shared and private comments
             const allCommentsToInject = [...sharedComments, ...privateComments];
-            newText = injectComments(cleanText, allCommentsToInject, true);
+            newText = injectComments(text, privateComments, true);
+            vscode.window.showInformationMessage("VCM: Mode = COMMENTED + PRIVATE (all comments visible) 🔓");
           } else {
-            // In clean mode: show ONLY private comments
+            // In clean mode: show ONLY private comments + alwaysShow
             // Strip any existing private comments first (to avoid double injection)
             const cleanText = stripComments(text, doc.uri.path, privateComments, false, false);
 
             // Inject only private comments
             newText = injectComments(cleanText, privateComments, true);
+            vscode.window.showInformationMessage("VCM: Mode = CLEAN + PRIVATE (private + alwaysShow visible) 🔓");
           }
 
           privateCommentsVisible.set(doc.uri.fsPath, true);
 
           // Mark that we just injected from VCM so saveVCM doesn't re-extract these as shared comments
           justInjectedFromVCM.add(doc.uri.fsPath);
-
-          vscode.window.showInformationMessage("VCM: Private comments visible 🔓");
         }
 
         // Replace entire document content
