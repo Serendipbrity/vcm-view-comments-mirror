@@ -2005,10 +2005,19 @@ async function activate(context) {
   // WATCHERS
   // ---------------------------------------------------------------------------
 
+  // Track undo/redo to prevent VCM corruption
+  let lastChangeWasUndoRedo = false;
+
   // Watch for file saves and update .vcm files
   // vcmSyncEnabled flag prevents infinite loops during toggles
   const saveWatcher = vscode.workspace.onDidSaveTextDocument(async (doc) => {
     if (!vcmSyncEnabled) return;  // Skip if we're in the middle of a toggle
+    if (lastChangeWasUndoRedo) {
+      // Don't update VCM on save if the last change was undo/redo
+      // This prevents overwriting VCM with alwaysShow/private comments that are visible in clean mode
+      lastChangeWasUndoRedo = false;
+      return;
+    }
     // saveVCM() will check if file is in clean mode internally
     await saveVCM(doc);
   });
@@ -2020,9 +2029,38 @@ async function activate(context) {
     let writeTimeout;
     const changeWatcher = vscode.workspace.onDidChangeTextDocument((e) => {
       if (!vcmSyncEnabled) return;
-      // saveVCM() will check if file is in clean mode internally
+
+      // Detect undo/redo
+      const isUndoRedo = e.reason === vscode.TextDocumentChangeReason.Undo ||
+                         e.reason === vscode.TextDocumentChangeReason.Redo;
+      if (isUndoRedo) {
+        lastChangeWasUndoRedo = true;
+        // Update mode detection on undo/redo
+        const doc = e.document;
+        setTimeout(async () => {
+          const actualMode = await detectInitialMode(doc, vcmDir);
+          const storedMode = isCommentedMap.get(doc.uri.fsPath);
+          if (storedMode !== actualMode) {
+            isCommentedMap.set(doc.uri.fsPath, actualMode);
+          }
+
+          // Also detect private visibility on undo/redo
+          const relativePath = vscode.workspace.asRelativePath(doc.uri);
+          const actualPrivateVisibility = await detectPrivateVisibility(doc, relativePath);
+          const storedPrivateVisibility = privateCommentsVisible.get(doc.uri.fsPath);
+          if (storedPrivateVisibility !== actualPrivateVisibility) {
+            privateCommentsVisible.set(doc.uri.fsPath, actualPrivateVisibility);
+          }
+        }, 100);
+        return; // Don't save VCM on undo/redo
+      }
+
+      // Normal edit - save VCM after debounce
       clearTimeout(writeTimeout);
-      writeTimeout = setTimeout(() => saveVCM(e.document), 2000);
+      writeTimeout = setTimeout(() => {
+        lastChangeWasUndoRedo = false; // Reset flag after debounce
+        saveVCM(e.document);
+      }, 2000);
     });
     context.subscriptions.push(changeWatcher);
   }
