@@ -17,8 +17,30 @@ function createDetectors({
       // Detection logic:
       // - If shared comments are visible → commented mode
       // - If only private (or no comments) → clean mode
-      const { sharedComments } = await loadAllComments(relativePath);
+      const { sharedComments = [], privateComments = [] } = await loadAllComments(relativePath);
       const comments = sharedComments || [];
+
+      const keyFor = (c) => `${c.type}:${c.anchor}:${c.prevHash || 'null'}:${c.nextHash || 'null'}`;
+      const privateKeys = new Set(privateComments.map(keyFor));
+      const alwaysShowKeys = new Set();
+      for (const sc of sharedComments) {
+        const hasAlwaysShow = sc.alwaysShow || (sc.block && sc.block.some(b => b.alwaysShow));
+        if (hasAlwaysShow) {
+          alwaysShowKeys.add(keyFor(sc));
+        }
+      }
+
+      // Fallback/fast-path: if the document currently contains comments that are NOT
+      // private (from VCM) and NOT alwaysShow (from shared VCM), treat it as commented mode.
+      const text = doc.getText();
+      const currentComments = extractComments(text, doc.uri.path);
+      const filteredCurrent = currentComments.filter(c => {
+        const key = keyFor(c);
+        return !privateKeys.has(key) && !alwaysShowKeys.has(key);
+      });
+      if (filteredCurrent.length > 0) {
+        return true;
+      }
 
       // No shared comments exist → default to clean mode
       if (comments.length === 0) {
@@ -54,8 +76,6 @@ function createDetectors({
       }
 
       // Standard case: Check if first 3 shared (non-alwaysShow) comments are visible
-      // Load private comments to exclude them from detection (only first 3 for efficiency)
-      const { privateComments } = await loadAllComments(relativePath);
       const privateTexts = new Set();
       const privateCheckLimit = Math.min(3, privateComments.length);
       for (let i = 0; i < privateCheckLimit; i++) {
@@ -70,11 +90,10 @@ function createDetectors({
       }
 
       // Extract current comments (only what we need for comparison)
-      const text = doc.getText();
-      const currentComments = extractComments(text, doc.uri.path);
+      const currentCommentsForCheck = extractComments(text, doc.uri.path);
 
       // Filter current comments to only non-private ones
-      const currentNonPrivateComments = currentComments.filter((c) => {
+      const currentNonPrivateComments = currentCommentsForCheck.filter((c) => {
         if (c.type === "inline") {
           return !privateTexts.has(c.text);
         } else if (c.block) {
@@ -125,7 +144,13 @@ function createDetectors({
       return true; // All shared sample comments were present, so we're in commented mode.
     } catch {
       // If the .vcm.json didn’t exist or was unreadable:
-      // Check if the actual file has comments
+      // Check if the actual file has comments (block or inline)
+      // First, use the same extractor used elsewhere for reliability
+      const extracted = extractComments(doc.getText(), doc.uri.path);
+      if (extracted.length > 0) {
+        return true;
+      }
+
       const commentMarkers = getCommentMarkersForFile(doc.uri.path);
       const lines = doc.getText().split("\n");
 
@@ -137,6 +162,11 @@ function createDetectors({
           // If any line begins with a comment marker, return true (commented).
           if (trimmed.startsWith(marker)) {
             return true; // File has comments - isCommented = true
+          }
+          // Detect inline comments: marker appears later in the line with whitespace before it
+          const markerIdx = line.indexOf(marker);
+          if (markerIdx > 0 && /\s/.test(line[markerIdx - 1])) {
+            return true;
           }
         }
       }

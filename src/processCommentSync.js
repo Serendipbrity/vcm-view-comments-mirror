@@ -19,10 +19,7 @@ function processCommentSync({
   isPrivateMode = false, // boolean: true = processing private comments, false = shared
   wasJustInjected = false, // boolean: skip processing in clean mode if just injected
 }) {
-  const buildContextKey = (comment) =>
-    `${comment.type}:${comment.anchor}:${comment.prevHash || "null"}:${
-      comment.nextHash || "null"
-    }`;
+
 
   // If just injected in clean mode, return existing comments unchanged
   if (!isCommented && wasJustInjected) {
@@ -50,11 +47,8 @@ function processCommentSync({
       const textKey =
         existing.text ||
         (existing.block ? existing.block.map((b) => b.text).join("\n") : "");
-      if (textKey) {
-        if (!existingByText.has(textKey)) {
-          existingByText.set(textKey, []);
-        }
-        existingByText.get(textKey).push(existing);
+      if (textKey && !existingByText.has(textKey)) {
+        existingByText.set(textKey, existing);
       }
     }
 
@@ -70,17 +64,14 @@ function processCommentSync({
       }
       otherByKey.get(key).push(otherComment);
 
-      // Index by text (store array to handle duplicates)
+      // Index by text
       const textKey =
         otherComment.text ||
         (otherComment.block
           ? otherComment.block.map((b) => b.text).join("\n")
           : "");
-      if (textKey) {
-        if (!otherByText.has(textKey)) {
-          otherByText.set(textKey, []);
-        }
-        otherByText.get(textKey).push(otherComment);
+      if (textKey && !otherByText.has(textKey)) {
+        otherByText.set(textKey, otherComment);
       }
     }
 
@@ -141,32 +132,6 @@ function processCommentSync({
           existingByKey.delete(key);
         }
 
-        // For block comments, preserve line-level properties
-        if (current.type === "block" && current.block && existing.block) {
-          const mergedBlock = current.block.map((currentLine) => {
-            // Try to find matching line in existing by originalLineIndex or text
-            const existingLine = existing.block.find(
-              (el) =>
-                el.originalLineIndex === currentLine.originalLineIndex ||
-                el.text === currentLine.text
-            );
-            if (existingLine) {
-              return {
-                ...currentLine,
-                alwaysShow: existingLine.alwaysShow || undefined,
-                isPrivate: existingLine.isPrivate || undefined,
-              };
-            }
-            return currentLine;
-          });
-
-          return {
-            ...current,
-            block: mergedBlock,
-            alwaysShow: existing.alwaysShow || undefined,
-          };
-        }
-
         return {
           ...current,
           alwaysShow: existing.alwaysShow || undefined,
@@ -176,41 +141,13 @@ function processCommentSync({
 
       // No match by anchor - try matching by text (anchor might have changed)
       if (currentText && existingByText.has(currentText)) {
-        const candidates = existingByText.get(currentText);
-        // Find first unmatched candidate
-        for (const existing of candidates) {
-          if (!matchedExisting.has(existing)) {
-            matchedExisting.add(existing);
-
-            // For block comments, preserve line-level properties
-            if (current.type === "block" && current.block && existing.block) {
-              const mergedBlock = current.block.map((currentLine) => {
-                // Try to find matching line in existing by text
-                const existingLine = existing.block.find(
-                  (el) => el.text === currentLine.text
-                );
-                if (existingLine) {
-                  return {
-                    ...currentLine,
-                    alwaysShow: existingLine.alwaysShow || undefined,
-                    isPrivate: existingLine.isPrivate || undefined,
-                  };
-                }
-                return currentLine;
-              });
-
-              return {
-                ...current,
-                block: mergedBlock,
-                alwaysShow: existing.alwaysShow || undefined,
-              };
-            }
-
-            return {
-              ...current,
-              alwaysShow: existing.alwaysShow || undefined,
-            };
-          }
+        const existing = existingByText.get(currentText);
+        if (!matchedExisting.has(existing)) {
+          matchedExisting.add(existing);
+          return {
+            ...current,
+            alwaysShow: existing.alwaysShow || undefined,
+          };
         }
       }
 
@@ -261,17 +198,14 @@ function processCommentSync({
       // PRIVATE MODE IN CLEAN: Update anchors by matching text (like shared)
       // ====================================================================
 
-      // Build map by text for matching (store array to handle duplicates)
+      // Build map by text for matching
       const existingByText = new Map();
       for (const existing of existingComments) {
         const textKey =
           existing.text ||
           (existing.block ? existing.block.map((b) => b.text).join("\n") : "");
-        if (textKey) {
-          if (!existingByText.has(textKey)) {
-            existingByText.set(textKey, []);
-          }
-          existingByText.get(textKey).push(existing);
+        if (textKey && !existingByText.has(textKey)) {
+          existingByText.set(textKey, existing);
         }
       }
 
@@ -295,25 +229,21 @@ function processCommentSync({
         // Match by text first (handles when comment moves)
         let existing = null;
         if (currentText && existingByText.has(currentText)) {
-          const candidates = existingByText.get(currentText);
-          // Find first unmatched candidate
-          for (const candidate of candidates) {
-            if (!matchedExisting.has(candidate)) {
-              existing = candidate;
-              matchedExisting.add(existing);
-              // Update anchor to new position
-              existing.anchor = current.anchor;
-              existing.prevHash = current.prevHash;
-              existing.nextHash = current.nextHash;
-              existing.originalLineIndex = current.originalLineIndex;
-              // Update content
-              existing.text = current.text;
-              existing.block = current.block;
-              // Update anchorText
-              if (current.anchorText !== undefined) {
-                existing.anchorText = current.anchorText;
-              }
-              break; // Found and updated, stop looking
+          const candidate = existingByText.get(currentText);
+          if (!matchedExisting.has(candidate)) {
+            existing = candidate;
+            matchedExisting.add(existing);
+            // Update anchor to new position
+            existing.anchor = current.anchor;
+            existing.prevHash = current.prevHash;
+            existing.nextHash = current.nextHash;
+            existing.originalLineIndex = current.originalLineIndex;
+            // Update content
+            existing.text = current.text;
+            existing.block = current.block;
+            // Update anchorText
+            if (current.anchorText !== undefined) {
+              existing.anchorText = current.anchorText;
             }
           }
         }
@@ -347,7 +277,7 @@ function processCommentSync({
       // SHARED MODE IN CLEAN: Track changes via text_cleanMode
       // ====================================================================
 
-      // Build map by text_cleanMode content for matching (store array to handle duplicates)
+      // Build map by text_cleanMode content for matching
       const existingByTextCleanMode = new Map();
       for (const existing of existingComments) {
         if (existing.text_cleanMode) {
@@ -357,11 +287,8 @@ function processCommentSync({
               : Array.isArray(existing.text_cleanMode)
               ? existing.text_cleanMode.map((b) => b.text).join("\n")
               : "";
-          if (textKey) {
-            if (!existingByTextCleanMode.has(textKey)) {
-              existingByTextCleanMode.set(textKey, []);
-            }
-            existingByTextCleanMode.get(textKey).push(existing);
+          if (textKey && !existingByTextCleanMode.has(textKey)) {
+            existingByTextCleanMode.set(textKey, existing);
           }
         }
       }
@@ -404,18 +331,14 @@ function processCommentSync({
 
         // First, try to match by text_cleanMode content (handles anchor changes)
         if (currentText && existingByTextCleanMode.has(currentText)) {
-          const candidates = existingByTextCleanMode.get(currentText);
-          // Find first unmatched candidate
-          for (const candidate of candidates) {
-            if (!matchedInCleanMode.has(candidate)) {
-              existing = candidate;
-              matchedInCleanMode.add(existing);
-              // Update anchor to new position (comment moved with code)
-              existing.anchor = current.anchor;
-              existing.prevHash = current.prevHash;
-              existing.nextHash = current.nextHash;
-              break; // Found and updated, stop looking
-            }
+          const candidate = existingByTextCleanMode.get(currentText);
+          if (!matchedInCleanMode.has(candidate)) {
+            existing = candidate;
+            matchedInCleanMode.add(existing);
+            // Update anchor to new position (comment moved with code)
+            existing.anchor = current.anchor;
+            existing.prevHash = current.prevHash;
+            existing.nextHash = current.nextHash;
           }
         }
 

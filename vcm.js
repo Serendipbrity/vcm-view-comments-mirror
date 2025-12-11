@@ -39,11 +39,6 @@ let isCommentedMap = new Map(); // Track state: true = comments visible, false =
 let justInjectedFromVCM = new Set(); // Track files that just had VCM comments injected (don't re-extract)
 let privateCommentsVisible = new Map(); // Track private comment visibility per file: true = visible, false = hidden
 
-// -----------------------------------------------------------------------------
-// Utility Helpers
-// -----------------------------------------------------------------------------
-
-// Comment and detection helpers moved to /src utilities
 
 // -----------------------------------------------------------------------------
 // Extension Activate
@@ -285,103 +280,90 @@ async function activate(context) {
     return { sharedComments, privateComments, allComments: [...sharedComments, ...privateComments] };
   }
 
-  const { detectInitialMode, detectPrivateVisibility } = createDetectors({
+    const { detectInitialMode, detectPrivateVisibility } = createDetectors({
     loadAllComments,
     extractComments,
     hashLine,
     vscode,
   });
 
-  // Save comments, splitting them into shared and private files
-  // onlyUpdateExisting: if true, only update existing VCM files, don't create new ones
-  async function saveCommentsToVCM(relativePath, comments, onlyUpdateExisting = false) {
-    // Filter comments into shared and private
-    // A comment goes to PRIVATE if:
-    //   - The entire comment has isPrivate flag, OR
-    //   - For blocks: ANY line has isPrivate
-    // Everything else goes to SHARED
-
-    // First, identify which comments should go to private
-    const shouldBePrivate = (c) => {
-      // If entire comment is private, include it
-      if (c.isPrivate) return true;
-
-      // For block comments, include if any line is private
-      if (c.type === 'block' && c.block) {
-        return c.block.some(line => line.isPrivate);
-      }
-
-      return false;
-    };
-
-    const privateComments = comments.filter(shouldBePrivate).map(c => {
+  // ============================================================================
+  // saveCommentsToVCM()
+  // ============================================================================
+  // Low-level writer that splits comments into shared and private VCM files.
+  // This function ALWAYS writes when called (no gating logic).
+  //
+  // Used by:
+  // - saveVCM() after extraction/merging (gating happens in saveVCM)
+  // - Mark/unmark commands (explicit user actions, always allowed to create/update)
+  // - Toggle commands (explicit user actions, always allowed to create/update)
+  //
+  // Logic:
+  // - Filters comments by isPrivate flag
+  // - Writes shared comments to .vcm/shared/{file}.vcm.json
+  // - Writes private comments to .vcm/private/{file}.vcm.json
+  // - Creates VCM files if they don't exist
+  // - Updates VCM files if they exist
+  // ============================================================================
+  async function saveCommentsToVCM(relativePath, comments) {
+    const sharedComments = comments.filter(c => !c.isPrivate);
+    const privateComments = comments.filter(c => c.isPrivate).map(c => {
       const { isPrivate, ...rest } = c;
       return rest; // Remove isPrivate flag when saving to private file
     });
 
-    // Shared comments = everything NOT going to private
-    const sharedComments = comments.filter(c => !shouldBePrivate(c));
-
     // Save shared comments (only if there are shared comments or a shared VCM file already exists)
     const sharedExists = await vcmFileExists(vcmDir, relativePath);
+    if (sharedComments.length > 0 || sharedExists) {
+      // Ensure the base .vcm/shared directory exists
+      await vscode.workspace.fs.createDirectory(vcmDir).catch(() => {});
 
-    // If onlyUpdateExisting is true, only save if VCM file already exists
-    if (!onlyUpdateExisting || sharedExists) {
-      if (sharedComments.length > 0 || sharedExists) {
-        // Ensure the base .vcm/shared directory exists
-        await vscode.workspace.fs.createDirectory(vcmDir).catch(() => {});
+      const sharedFileUri = vscode.Uri.joinPath(vcmDir, relativePath + ".vcm.json");
+      const sharedData = {
+        file: relativePath,
+        lastModified: new Date().toISOString(),
+        comments: sharedComments,
+      };
 
-        const sharedFileUri = vscode.Uri.joinPath(vcmDir, relativePath + ".vcm.json");
-        const sharedData = {
-          file: relativePath,
-          lastModified: new Date().toISOString(),
-          comments: sharedComments,
-        };
-
-        // Ensure dir structure exists
-        const pathParts = relativePath.split(/[\\/]/);
-        if (pathParts.length > 1) {
-          const vcmSubdir = vscode.Uri.joinPath(vcmDir, pathParts.slice(0, -1).join("/"));
-          await vscode.workspace.fs.createDirectory(vcmSubdir).catch(() => {});
-        }
-
-        await vscode.workspace.fs.writeFile(
-          sharedFileUri,
-          Buffer.from(JSON.stringify(sharedData, null, 2), "utf8")
-        );
+      // Ensure dir structure exists
+      const pathParts = relativePath.split(/[\\/]/);
+      if (pathParts.length > 1) {
+        const vcmSubdir = vscode.Uri.joinPath(vcmDir, pathParts.slice(0, -1).join("/"));
+        await vscode.workspace.fs.createDirectory(vcmSubdir).catch(() => {});
       }
+
+      await vscode.workspace.fs.writeFile(
+        sharedFileUri,
+        Buffer.from(JSON.stringify(sharedData, null, 2), "utf8")
+      );
     }
 
     // 4️⃣ Private VCM path + write or delete
-    const privateExists = await vcmFileExists(vcmPrivateDir, relativePath);
     const privateFileUri = vscode.Uri.joinPath(vcmPrivateDir, relativePath + ".vcm.json");
+    if (privateComments.length > 0) {
+      const privateData = {
+        file: relativePath,
+        lastModified: new Date().toISOString(),
+        comments: privateComments,
+      };
 
-    // If onlyUpdateExisting is true, only save if VCM file already exists
-    if (!onlyUpdateExisting || privateExists) {
-      if (privateComments.length > 0) {
-        const privateData = {
-          file: relativePath,
-          lastModified: new Date().toISOString(),
-          comments: privateComments,
-        };
+      const pathParts = relativePath.split(/[\\/]/);
+      if (pathParts.length > 1) {
+        const vcmPrivateSubdir = vscode.Uri.joinPath(vcmPrivateDir, pathParts.slice(0, -1).join("/"));
+        await vscode.workspace.fs.createDirectory(vcmPrivateSubdir).catch(() => {});
+      }
 
-        const pathParts = relativePath.split(/[\\/]/);
-        if (pathParts.length > 1) {
-          const vcmPrivateSubdir = vscode.Uri.joinPath(vcmPrivateDir, pathParts.slice(0, -1).join("/"));
-          await vscode.workspace.fs.createDirectory(vcmPrivateSubdir).catch(() => {});
-        }
-
-        await vscode.workspace.fs.writeFile(
-          privateFileUri,
-          Buffer.from(JSON.stringify(privateData, null, 2), "utf8")
-        );
-      } else if (privateExists) {
-        // Delete private VCM file if no private comments and file exists
-        try {
-          await vscode.workspace.fs.delete(privateFileUri);
-        } catch {
-          // Ignore non-existent file
-        }
+      await vscode.workspace.fs.writeFile(
+        privateFileUri,
+        Buffer.from(JSON.stringify(privateData, null, 2), "utf8")
+      );
+    } else {
+      // Delete private VCM file if no private comments
+      const privateFileUri = vscode.Uri.joinPath(vcmPrivateDir, relativePath + ".vcm.json");
+      try {
+        await vscode.workspace.fs.delete(privateFileUri);
+      } catch {
+        // Ignore non-existent file
       }
     }
   }
@@ -396,8 +378,6 @@ async function activate(context) {
     }
   }
 
-  // processCommentSync moved to src/processCommentSync.js
-
   // ============================================================================
   // saveVCM()
   // ============================================================================
@@ -409,23 +389,36 @@ async function activate(context) {
   //         → prepend new comments to existing ones where possible,
   //           without overwriting anything in the .vcm.json.
   //
-  // This function is always called by the save watcher (liveSync included).
-  // It auto-detects commented vs. clean by comparing line hashes against
-  // a small sample of known VCM anchors (first/last 5) for speed.
+  // GATING POLICY (allowCreate parameter):
+  // - allowCreate = false (default): Only updates existing VCM files. If no VCM
+  //   exists, this function does nothing. Use for auto-save/liveSync paths.
+  // - allowCreate = true: Creates VCM if missing, or updates if exists. Use for
+  //   explicit VCM actions (toggles, split view, etc.).
   //
-  // allowCreate: if true, allows creating new VCM files (used by explicit user actions)
+  // CALL SITES:
+  // - saveWatcher / changeWatcher: allowCreate = false (auto-save, don't create)
+  // - Toggle commented/clean: allowCreate = true (explicit user action)
+  // - Split view: allowCreate = true (explicit user action)
+  // - Mark/unmark commands: Use saveCommentsToVCM directly (explicit actions)
   // ============================================================================
   async function saveVCM(doc, allowCreate = false) {
-    console.log("saveVCM()", {
-      fsPath: doc.uri.fsPath,
-      isCommented: isCommentedMap.get(doc.uri.fsPath),
-      privateVisible: privateCommentsVisible.get(doc.uri.fsPath),
-      justInjected: justInjectedFromVCM.has(doc.uri.fsPath),
-    });
-
     if (doc.uri.scheme !== "file") return;
     if (doc.uri.path.includes("/.vcm/")) return;
     if (doc.languageId === "json") return;
+
+    const relativePath = vscode.workspace.asRelativePath(doc.uri);
+
+    // 🔑 GATING LOGIC: Check if VCM files exist before proceeding
+    const sharedExists = await vcmFileExists(vcmDir, relativePath);
+    const privateExists = await vcmFileExists(vcmPrivateDir, relativePath);
+    const anyVcmExists = sharedExists || privateExists;
+
+    // Core rule: If this is NOT an explicit VCM action (allowCreate === false)
+    // AND no VCM exists yet → do nothing. Don't create one.
+    if (!allowCreate && !anyVcmExists) {
+      console.log(`[saveVCM] Skipping ${relativePath} - no VCM exists and allowCreate=false`);
+      return;
+    }
 
     // Check if we just injected comments from VCM
     // (this flag prevents re-extracting immediately after injection in clean mode)
@@ -435,8 +428,6 @@ async function activate(context) {
     }
 
     const text = doc.getText();
-    const relativePath = vscode.workspace.asRelativePath(doc.uri);
-    const vcmFileUri = vscode.Uri.joinPath(vcmDir, relativePath + ".vcm.json");
 
     // Load existing VCM data from both shared and private files
     const { sharedComments: existingComments, privateComments: existingPrivateComments } = await loadAllComments(relativePath);
@@ -534,28 +525,18 @@ async function activate(context) {
     }).map(pc => ({ ...pc, isPrivate: true })); // Ensure isPrivate flag is set
 
     const finalCommentsWithPrivate = [...finalComments, ...missingPrivateComments];
-    // Only update existing VCM files unless explicitly allowed to create new ones
-    await saveCommentsToVCM(relativePath, finalCommentsWithPrivate, !allowCreate);
+    await saveCommentsToVCM(relativePath, finalCommentsWithPrivate);
   }
 
   // ---------------------------------------------------------------------------
   // WATCHERS
   // ---------------------------------------------------------------------------
 
-  // Track undo/redo to prevent VCM corruption
-  let lastChangeWasUndoRedo = false;
-
   // Watch for file saves and update .vcm files
   // vcmSyncEnabled flag prevents infinite loops during toggles
   const saveWatcher = vscode.workspace.onDidSaveTextDocument(async (doc) => {
     if (!vcmSyncEnabled) return;  // Skip if we're in the middle of a toggle
-    if (lastChangeWasUndoRedo) {
-      // Don't update VCM on save if the last change was undo/redo
-      // This prevents overwriting VCM with alwaysShow/private comments that are visible in clean mode
-      lastChangeWasUndoRedo = false;
-      return;
-    }
-    // saveVCM() will check if file is in clean mode internally
+    // allowCreate = false (default): only update existing VCM files, don't create new ones
     await saveVCM(doc);
   });
   context.subscriptions.push(saveWatcher);
@@ -566,38 +547,9 @@ async function activate(context) {
     let writeTimeout;
     const changeWatcher = vscode.workspace.onDidChangeTextDocument((e) => {
       if (!vcmSyncEnabled) return;
-
-      // Detect undo/redo
-      const isUndoRedo = e.reason === vscode.TextDocumentChangeReason.Undo ||
-                         e.reason === vscode.TextDocumentChangeReason.Redo;
-      if (isUndoRedo) {
-        lastChangeWasUndoRedo = true;
-        // Update mode detection on undo/redo
-        const doc = e.document;
-        setTimeout(async () => {
-          const actualMode = await detectInitialMode(doc, vcmDir);
-          const storedMode = isCommentedMap.get(doc.uri.fsPath);
-          if (storedMode !== actualMode) {
-            isCommentedMap.set(doc.uri.fsPath, actualMode);
-          }
-
-          // Also detect private visibility on undo/redo
-          const relativePath = vscode.workspace.asRelativePath(doc.uri);
-          const actualPrivateVisibility = await detectPrivateVisibility(doc, relativePath);
-          const storedPrivateVisibility = privateCommentsVisible.get(doc.uri.fsPath);
-          if (storedPrivateVisibility !== actualPrivateVisibility) {
-            privateCommentsVisible.set(doc.uri.fsPath, actualPrivateVisibility);
-          }
-        }, 100);
-        return; // Don't save VCM on undo/redo
-      }
-
-      // Normal edit - save VCM after debounce
+      // allowCreate = false (default): only update existing VCM files, don't create new ones
       clearTimeout(writeTimeout);
-      writeTimeout = setTimeout(() => {
-        lastChangeWasUndoRedo = false; // Reset flag after debounce
-        saveVCM(e.document);
-      }, 2000);
+      writeTimeout = setTimeout(() => saveVCM(e.document), 2000);
     });
     context.subscriptions.push(changeWatcher);
   }
@@ -815,14 +767,21 @@ async function activate(context) {
 
     if (currentIsCommented === true) {
       // Currently in commented mode -> switch to clean mode (hide comments)
+      // If no VCM exists yet, create it immediately so the first toggle succeeds
+      const sharedExistsBootstrap = await vcmFileExists(vcmDir, relativePath);
+      const privateExistsBootstrap = await vcmFileExists(vcmPrivateDir, relativePath);
+      if (!sharedExistsBootstrap && !privateExistsBootstrap) {
+        const extractedBootstrap = extractComments(text, doc.uri.path);
+        await saveCommentsToVCM(relativePath, extractedBootstrap, true);
+      }
+
       // Ensure a .vcm file exists before stripping
       try {
         await vscode.workspace.fs.stat(vcmFileUri);
       } catch {
         // No .vcm yet — extract and save before removing comments
         // We're still in commented mode here, so this will extract all comments
-        // Allow creating new VCM file since this is an explicit user action (toggle)
-        await saveVCM(doc, true);
+        await saveVCM(doc, true); // allowCreate = true for explicit toggle action
       }
 
       // If liveSync is disabled, always update manually
@@ -830,8 +789,7 @@ async function activate(context) {
       const config = vscode.workspace.getConfiguration("vcm");
       const liveSync = config.get("liveSync", false);
       if (!liveSync) {
-        // Allow creating new VCM file since this is an explicit user action (toggle)
-        await saveVCM(doc, true);
+        await saveVCM(doc, true); // allowCreate = true for explicit toggle action
       }
 
       // Load ALL VCM comments (shared + private) to check for alwaysShow and isPrivate
@@ -843,9 +801,7 @@ async function activate(context) {
       // Mark this file as now in clean mode
       isCommentedMap.set(doc.uri.fsPath, false);
       // DO NOT change privateCommentsVisible - private comment visibility persists across mode toggles
-
-      const privateModeStr = keepPrivate ? " + PRIVATE" : "";
-      vscode.window.showInformationMessage(`VCM: Mode = CLEAN${privateModeStr}`);
+      vscode.window.showInformationMessage("VCM: Switched to clean mode (comments hidden)");
     } else {
       // Currently in clean mode -> switch to commented mode (show comments)
       try {
@@ -878,16 +834,13 @@ async function activate(context) {
         const includePrivate = privateCommentsVisible.get(doc.uri.fsPath) === true;
         newText = injectComments(cleanText, allMergedComments, includePrivate);
 
-        // Save the merged shared comments back to VCM (private comments are stored separately)
-        const updatedVcmData = {
-          file: relativePath,
-          lastModified: new Date().toISOString(),
-          comments: mergedSharedComments,
-        };
-        await vscode.workspace.fs.writeFile(
-          vcmFileUri,
-          Buffer.from(JSON.stringify(updatedVcmData, null, 2), "utf8")
-        );
+        // Save the merged shared comments back to VCM (using saveCommentsToVCM for consistency)
+        // Combine shared and private, preserving private comments unchanged
+        const commentsToSave = [
+          ...mergedSharedComments,
+          ...existingPrivateComments.map(c => ({ ...c, isPrivate: true }))
+        ];
+        await saveCommentsToVCM(relativePath, commentsToSave);
 
         // Mark this file as now in commented mode
         isCommentedMap.set(doc.uri.fsPath, true);
@@ -896,15 +849,12 @@ async function activate(context) {
         // Mark that we just injected from VCM - don't re-extract on next save
         justInjectedFromVCM.add(doc.uri.fsPath);
 
-        const privateVisible = privateCommentsVisible.get(doc.uri.fsPath) === true;
-        const privateModeStr = privateVisible ? " + PRIVATE" : "";
-        vscode.window.showInformationMessage(`VCM: Mode = COMMENTED${privateModeStr}`);
+        vscode.window.showInformationMessage("VCM: Switched to commented mode (comments visible)");
       } catch {
         // No .vcm file exists yet — create one now
         isCommentedMap.set(doc.uri.fsPath, true);
         // DO NOT initialize privateCommentsVisible - it will default to false (hidden) if not set
-        // Allow creating new VCM file since this is an explicit user action (toggle)
-        await saveVCM(doc, true);
+        await saveVCM(doc, true); // allowCreate = true for explicit toggle action
         try {
           // Load ALL comments (shared + private) after saving
           const { sharedComments, privateComments } = await loadAllComments(relativePath);
@@ -918,9 +868,7 @@ async function activate(context) {
           // Mark that we just injected from VCM - don't re-extract on next save
           justInjectedFromVCM.add(doc.uri.fsPath);
 
-          const privateVisible = privateCommentsVisible.get(doc.uri.fsPath) === true;
-          const privateModeStr = privateVisible ? " + PRIVATE" : "";
-          vscode.window.showInformationMessage(`VCM: Mode = COMMENTED${privateModeStr}`);
+          vscode.window.showInformationMessage("VCM: Created new .vcm and switched to commented mode");
         } catch {
           vscode.window.showErrorMessage("VCM: Could not create .vcm data — save the file once with comments.");
           vcmSyncEnabled = true;
@@ -1054,34 +1002,14 @@ async function activate(context) {
             targetComment = candidates[0];
           } else {
             // Multiple comments with same anchor - use line number to disambiguate
-            targetComment = candidates.find(c => {
-              if (c.type === 'inline') {
-                return c.originalLineIndex === selectedLine;
-              } else if (c.type === 'block' && c.block) {
-                // For blocks, check if selectedLine is within the block
-                return c.block.some(b => b.originalLineIndex === selectedLine);
-              }
-              return false;
-            });
+            targetComment = candidates.find(c => c.originalLineIndex === selectedLine);
             if (!targetComment) {
               targetComment = candidates[0]; // Fallback to first match
             }
           }
 
-          // Mark as always show
-          if (targetComment.type === 'inline') {
-            // For inline comments, mark the comment itself
-            targetComment.alwaysShow = true;
-          } else if (targetComment.type === 'block' && targetComment.block) {
-            // For block comments, mark only the specific line that was clicked
-            const lineInBlock = targetComment.block.find(b => b.originalLineIndex === selectedLine);
-            if (lineInBlock) {
-              lineInBlock.alwaysShow = true;
-            } else {
-              // Fallback: mark all lines in block
-              targetComment.alwaysShow = true;
-            }
-          }
+          // Only add the specific comment being marked as always show
+          targetComment.alwaysShow = true;
 
           comments = [targetComment];
         } else {
@@ -1097,16 +1025,8 @@ async function activate(context) {
             return;
           }
 
-          // Find the current comment at the selected line (handle both inline and block)
-          let currentComment = currentCandidates.find(c => {
-            if (c.type === 'inline') {
-              return c.originalLineIndex === selectedLine;
-            } else if (c.type === 'block' && c.block) {
-              // For blocks, check if selectedLine is within the block
-              return c.block.some(b => b.originalLineIndex === selectedLine);
-            }
-            return false;
-          });
+          // Find the current comment at the selected line
+          let currentComment = currentCandidates.find(c => c.originalLineIndex === selectedLine);
           if (!currentComment && currentCandidates.length > 0) {
             currentComment = currentCandidates[0]; // Fallback
           }
@@ -1138,54 +1058,18 @@ async function activate(context) {
             targetVcmComment = bestMatch || vcmCandidates[0];
           } else {
             // Comment not found in existing VCM - add it as a new entry with alwaysShow
-            if (currentComment.type === 'inline') {
-              currentComment.alwaysShow = true;
-            } else if (currentComment.type === 'block' && currentComment.block) {
-              // Mark only the specific line that was clicked
-              const lineInBlock = currentComment.block.find(b => b.originalLineIndex === selectedLine);
-              if (lineInBlock) {
-                lineInBlock.alwaysShow = true;
-              } else {
-                // Fallback: mark the entire block
-                currentComment.alwaysShow = true;
-              }
-            }
+            currentComment.alwaysShow = true;
             comments.push(currentComment);
             targetVcmComment = null; // Mark that we added it, so we don't try to modify it below
           }
 
           if (targetVcmComment) {
-            // Check if comment is already marked as private
-            let isPrivate = false;
-            if (targetVcmComment.type === 'inline') {
-              isPrivate = targetVcmComment.isPrivate;
-            } else if (targetVcmComment.type === 'block' && targetVcmComment.block) {
-              const lineInBlock = targetVcmComment.block.find(b => b.originalLineIndex === selectedLine);
-              isPrivate = lineInBlock?.isPrivate || targetVcmComment.isPrivate;
-            }
-
-            if (isPrivate) {
-              vscode.window.showWarningMessage("VCM: Cannot mark as 'Always Show' - comment is already marked as Private. Unmark Private first.");
-              return;
-            }
-
-            if (targetVcmComment.type === 'inline') {
-              targetVcmComment.alwaysShow = true;
-            } else if (targetVcmComment.type === 'block' && targetVcmComment.block) {
-              // Mark only the specific line that was clicked
-              const lineInBlock = targetVcmComment.block.find(b => b.originalLineIndex === selectedLine);
-              if (lineInBlock) {
-                lineInBlock.alwaysShow = true;
-              } else {
-                // Fallback: mark the entire block
-                targetVcmComment.alwaysShow = true;
-              }
-            }
+            targetVcmComment.alwaysShow = true;
           }
         }
 
-        // Save updated comments (allow creating new VCM for explicit user action)
-        await saveCommentsToVCM(relativePath, comments, false);
+        // Save updated comments
+        await saveCommentsToVCM(relativePath, comments);
 
         vscode.window.showInformationMessage("VCM: Marked as Always Show ✅");
         // Update context to refresh menu items
@@ -1300,24 +1184,11 @@ async function activate(context) {
         }
 
         // Search for comment with this anchor and remove alwaysShow
-        // For block comments, need to check individual lines
         let found = false;
         for (const c of comments) {
-          if (c.anchor === anchorHash) {
-            // Check if entire comment is marked
-            if (c.alwaysShow) {
-              delete c.alwaysShow;
-              found = true;
-            }
-
-            // For block comments, check individual lines
-            if (c.type === 'block' && c.block) {
-              const lineInBlock = c.block.find(b => b.originalLineIndex === selectedLine);
-              if (lineInBlock && lineInBlock.alwaysShow) {
-                delete lineInBlock.alwaysShow;
-                found = true;
-              }
-            }
+            if (c.anchor === anchorHash && c.alwaysShow) {
+            delete c.alwaysShow;
+            found = true;
           }
         }
 
@@ -1326,8 +1197,8 @@ async function activate(context) {
           return;
         }
 
-        // Save updated comments using helper function (only update existing VCM)
-        await saveCommentsToVCM(relativePath, comments, true);
+        // Save updated comments using helper function
+        await saveCommentsToVCM(relativePath, comments);
 
         // Check if we're in clean mode - if so, remove the comment from the document
         const isInCleanMode = isCommentedMap.get(doc.uri.fsPath) === false;
@@ -1458,18 +1329,7 @@ async function activate(context) {
 
         if (allComments.length === 0) {
           // No VCM exists - add only this comment to VCM, marked as private
-          if (commentAtCursor.type === 'block' && commentAtCursor.block) {
-            // Mark only the specific line that was clicked
-            const lineInBlock = commentAtCursor.block.find(b => b.originalLineIndex === selectedLine);
-            if (lineInBlock) {
-              lineInBlock.isPrivate = true;
-            } else {
-              // Fallback: mark the entire block
-              commentAtCursor.isPrivate = true;
-            }
-          } else {
-            commentAtCursor.isPrivate = true;
-          }
+          commentAtCursor.isPrivate = true;
           comments = [commentAtCursor];
         } else {
           // VCM exists - find and mark the matching comment using ALL hashes + text
@@ -1490,51 +1350,15 @@ async function activate(context) {
 
           if (!targetVcmComment) {
             // Comment not found in existing VCM - add it as a new private comment
-            if (commentAtCursor.type === 'block' && commentAtCursor.block) {
-              // Mark only the specific line that was clicked
-              const lineInBlock = commentAtCursor.block.find(b => b.originalLineIndex === selectedLine);
-              if (lineInBlock) {
-                lineInBlock.isPrivate = true;
-              } else {
-                // Fallback: mark the entire block
-                commentAtCursor.isPrivate = true;
-              }
-            } else {
-              commentAtCursor.isPrivate = true;
-            }
+            commentAtCursor.isPrivate = true;
             comments.push(commentAtCursor);
           } else {
-            // Check if comment is already marked as alwaysShow
-            let isAlwaysShow = false;
-            if (targetVcmComment.type === 'inline') {
-              isAlwaysShow = targetVcmComment.alwaysShow;
-            } else if (targetVcmComment.type === 'block' && targetVcmComment.block) {
-              const lineInBlock = targetVcmComment.block.find(b => b.originalLineIndex === selectedLine);
-              isAlwaysShow = lineInBlock?.alwaysShow || targetVcmComment.alwaysShow;
-            }
-
-            if (isAlwaysShow) {
-              vscode.window.showWarningMessage("VCM: Cannot mark as Private - comment is already marked as 'Always Show'. Unmark Always Show first.");
-              return;
-            }
-
-            // Mark the specific line within the block comment, not the entire block
-            if (targetVcmComment.type === 'block' && targetVcmComment.block) {
-              const lineInBlock = targetVcmComment.block.find(b => b.originalLineIndex === selectedLine);
-              if (lineInBlock) {
-                lineInBlock.isPrivate = true;
-              } else {
-                // Fallback: mark the entire block
-                targetVcmComment.isPrivate = true;
-              }
-            } else {
-              targetVcmComment.isPrivate = true;
-            }
+            targetVcmComment.isPrivate = true;
           }
         }
 
-        // Save updated comments (allow creating new VCM for explicit user action)
-        await saveCommentsToVCM(relativePath, comments, false);
+        // Save updated comments (will split into shared/private automatically)
+        await saveCommentsToVCM(relativePath, comments);
 
         // Check if private comments are currently visible
         const privateVisible = privateCommentsVisible.get(doc.uri.fsPath) === true;
@@ -1580,8 +1404,7 @@ async function activate(context) {
           // Set the global state to false since we auto-hid the comment
           privateCommentsVisible.set(doc.uri.fsPath, false);
 
-          const modeStr = isInCommentedMode ? "COMMENTED" : "CLEAN";
-          vscode.window.showInformationMessage(`VCM: Mode = ${modeStr}, Private comment hidden 🔒`);
+          vscode.window.showInformationMessage("VCM: Private comment hidden 🔒 Toggle Private Comments to view.");
         } else {
           vscode.window.showInformationMessage("VCM: Marked as Private 🔒");
         }
@@ -1706,20 +1529,7 @@ async function activate(context) {
         }
 
         // Match to VCM comment using context
-        // For blocks, check if any line within the block is private
-        const vcmCandidates = comments.filter(c => {
-          if (c.anchor !== anchorHash) return false;
-
-          // Check if entire comment is private
-          if (c.isPrivate) return true;
-
-          // For block comments, check if any line is private
-          if (c.type === 'block' && c.block) {
-            return c.block.some(line => line.isPrivate);
-          }
-
-          return false;
-        });
+        const vcmCandidates = comments.filter(c => c.anchor === anchorHash && c.isPrivate);
 
         if (vcmCandidates.length === 0) {
           vscode.window.showWarningMessage("VCM: This comment is not marked as private.");
@@ -1754,22 +1564,11 @@ async function activate(context) {
           targetVcmComment = bestMatch || vcmCandidates[0];
         }
 
-        // Remove isPrivate flag from the specific line (if block comment) or entire comment
-        if (targetVcmComment.type === 'block' && targetVcmComment.block) {
-          // Find and unmark the specific line that was clicked
-          const lineInBlock = targetVcmComment.block.find(b => b.originalLineIndex === selectedLine);
-          if (lineInBlock && lineInBlock.isPrivate) {
-            delete lineInBlock.isPrivate;
-          } else {
-            // Fallback: remove from entire block
-            delete targetVcmComment.isPrivate;
-          }
-        } else {
-          delete targetVcmComment.isPrivate;
-        }
+        // Remove isPrivate flag
+        delete targetVcmComment.isPrivate;
 
-        // Save updated comments (only update existing VCM)
-        await saveCommentsToVCM(relativePath, comments, true);
+        // Save updated comments (will split into shared/private automatically)
+        await saveCommentsToVCM(relativePath, comments);
 
         // Check if we need to remove the comment from the document
         const isInCommentedMode = isCommentedMap.get(doc.uri.fsPath);
@@ -1789,21 +1588,11 @@ async function activate(context) {
 
           if (matchingComment) {
             if (matchingComment.type === "block" && matchingComment.block) {
-              // Check if we removed isPrivate from a single line or the entire block
-              const removedFromSingleLine = targetVcmComment.block &&
-                targetVcmComment.block.find(b => b.originalLineIndex === selectedLine);
-
-              if (removedFromSingleLine) {
-                // Only remove the specific line that was unmarked
-                const range = new vscode.Range(selectedLine, 0, selectedLine + 1, 0);
-                edit.delete(doc.uri, range);
-              } else {
-                // Remove all lines in the block (entire block was unmarked)
-                const firstLine = Math.min(...matchingComment.block.map(b => b.originalLineIndex));
-                const lastLine = Math.max(...matchingComment.block.map(b => b.originalLineIndex));
-                const range = new vscode.Range(firstLine, 0, lastLine + 1, 0);
-                edit.delete(doc.uri, range);
-              }
+              // Remove all lines in the block (from first to last)
+              const firstLine = Math.min(...matchingComment.block.map(b => b.originalLineIndex));
+              const lastLine = Math.max(...matchingComment.block.map(b => b.originalLineIndex));
+              const range = new vscode.Range(firstLine, 0, lastLine + 1, 0);
+              edit.delete(doc.uri, range);
             } else if (matchingComment.type === "inline") {
               // Remove just the inline comment part (keep the code)
               const lineText = lines[matchingComment.originalLineIndex];
@@ -1977,11 +1766,7 @@ async function activate(context) {
 
           newText = resultLines.join("\n");
           privateCommentsVisible.set(doc.uri.fsPath, false);
-
-          // Show mode state after hiding private
-          const isInCommentedMode = isCommentedMap.get(doc.uri.fsPath);
-          const modeStr = isInCommentedMode ? "COMMENTED" : "CLEAN";
-          vscode.window.showInformationMessage(`VCM: Mode = ${modeStr} (private hidden) 🔒`);
+          vscode.window.showInformationMessage("VCM: Private comments hidden 🔒");
         } else {
           // Show private comments - inject them back
           // Load shared comments too
@@ -1998,22 +1783,22 @@ async function activate(context) {
 
             // Inject both shared and private comments
             const allCommentsToInject = [...sharedComments, ...privateComments];
-            newText = injectComments(text, privateComments, true);
-            vscode.window.showInformationMessage("VCM: Mode = COMMENTED + PRIVATE (all comments visible) 🔓");
+            newText = injectComments(cleanText, allCommentsToInject, true);
           } else {
-            // In clean mode: show ONLY private comments + alwaysShow
+            // In clean mode: show ONLY private comments
             // Strip any existing private comments first (to avoid double injection)
             const cleanText = stripComments(text, doc.uri.path, privateComments, false, false);
 
             // Inject only private comments
             newText = injectComments(cleanText, privateComments, true);
-            vscode.window.showInformationMessage("VCM: Mode = CLEAN + PRIVATE (private + alwaysShow visible) 🔓");
           }
 
           privateCommentsVisible.set(doc.uri.fsPath, true);
 
           // Mark that we just injected from VCM so saveVCM doesn't re-extract these as shared comments
           justInjectedFromVCM.add(doc.uri.fsPath);
+
+          vscode.window.showInformationMessage("VCM: Private comments visible 🔓");
         }
 
         // Replace entire document content
@@ -2086,10 +1871,9 @@ async function activate(context) {
       privateComments = result.privateComments;
     } catch {
       // No .vcm file exists yet - extract and save
-      // Allow creating new VCM file since this is an explicit user action (split view)
       sharedComments = extractComments(doc.getText(), doc.uri.path);
       privateComments = [];
-      await saveVCM(doc, true);
+      await saveVCM(doc, true); // allowCreate = true for explicit split view action
     }
 
     // Detect initial state if not already set

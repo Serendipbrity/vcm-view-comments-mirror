@@ -187,25 +187,8 @@ function injectComments(cleanText, comments, includePrivate = false) {
 
   // Include/exclude private comments based on if includePrivate is toggled on or off
   const commentsToInject = comments.filter(c => {
-    // Exclude comments with entire comment marked as alwaysShow
-    if (c.alwaysShow) return false;
-
-    // For block comments, check if ALL lines are marked as alwaysShow
-    // (individual line filtering happens during injection)
-    if (c.type === 'block' && c.block) {
-      const allLinesAlwaysShow = c.block.every(line => line.alwaysShow);
-      if (allLinesAlwaysShow) return false;
-
-      // If not including private, exclude blocks where ALL lines are private
-      if (!includePrivate) {
-        const allLinesPrivate = c.block.every(line => line.isPrivate);
-        if (allLinesPrivate) return false;
-      }
-    }
-
-    // Exclude comments with entire comment marked as private (if not including private)
-    if (c.isPrivate && !includePrivate) return false;
-
+    if (c.alwaysShow) return false; // Always exclude alwaysShow (managed separately)
+    if (c.isPrivate && !includePrivate) return false; // Exclude private if not explicitly included
     return true;
   });
 
@@ -391,22 +374,8 @@ function injectComments(cleanText, comments, includePrivate = false) {
           linesToInject = [];
         }
 
-        // Filter out lines that are marked as alwaysShow or isPrivate (they're already in the document)
-        // Only inject lines that are NOT marked
-        const filteredLines = linesToInject.filter(lineObj => {
-          // If includePrivate is false, don't inject private lines
-          if (!includePrivate && lineObj.isPrivate) {
-            return false;
-          }
-          // Don't inject alwaysShow lines (they're managed separately and already visible)
-          if (lineObj.alwaysShow) {
-            return false;
-          }
-          return true;
-        });
-
-        // Inject filtered lines from the block
-        for (const lineObj of filteredLines) {
+        // Inject all lines from the block (includes leading blanks, comments, and trailing blanks)
+        for (const lineObj of linesToInject) {
           result.push(lineObj.text);
         }
       }
@@ -523,55 +492,15 @@ function stripComments(text, filePath, vcmComments = [], keepPrivate = false, is
     return -1; // No comment found
   };
 
-  // Build maps of comment anchor + line info to metadata
-  // For blocks, we track individual lines by anchor + line index/text
-  const alwaysShowByAnchor = new Set();
-  const alwaysShowByText = new Map();
-  const privateByAnchor = new Set();
-  const privateByText = new Map();
-  const alwaysShowBlockLines = new Map(); // anchor -> Set of line texts that are alwaysShow
-  const privateBlockLines = new Map(); // anchor -> Set of line texts that are private
-
+  // Build sets of comment anchor hashes that should be kept
+  const alwaysShowAnchors = new Set();
+  const privateAnchors = new Set();
   for (const comment of vcmComments) {
-    if (comment.type === 'inline') {
-      const textKey = comment.text || '';
-
-      if (comment.alwaysShow) {
-        alwaysShowByAnchor.add(comment.anchor);
-        if (textKey) {
-          alwaysShowByText.set(textKey, true);
-        }
-      }
-      if (comment.isPrivate && keepPrivate) {
-        privateByAnchor.add(comment.anchor);
-        if (textKey) {
-          privateByText.set(textKey, true);
-        }
-      }
-    } else if (comment.type === 'block' && comment.block) {
-      // For blocks, track individual lines by anchor + line text
-      for (const line of comment.block) {
-        if (line.alwaysShow) {
-          if (!alwaysShowBlockLines.has(comment.anchor)) {
-            alwaysShowBlockLines.set(comment.anchor, new Set());
-          }
-          alwaysShowBlockLines.get(comment.anchor).add(line.text);
-        }
-        if (line.isPrivate && keepPrivate) {
-          if (!privateBlockLines.has(comment.anchor)) {
-            privateBlockLines.set(comment.anchor, new Set());
-          }
-          privateBlockLines.get(comment.anchor).add(line.text);
-        }
-      }
-
-      // Also check if the entire block is marked (legacy/fallback)
-      if (comment.alwaysShow) {
-        alwaysShowByAnchor.add(comment.anchor);
-      }
-      if (comment.isPrivate && keepPrivate) {
-        privateByAnchor.add(comment.anchor);
-      }
+    if (comment.alwaysShow) {
+      alwaysShowAnchors.add(comment.anchor);
+    }
+    if (comment.isPrivate && keepPrivate) {
+      privateAnchors.add(comment.anchor);
     }
   }
 
@@ -594,47 +523,26 @@ function stripComments(text, filePath, vcmComments = [], keepPrivate = false, is
         allCommentBlockLines.add(blockLine.originalLineIndex);
       }
 
-      // Check if entire block is marked as alwaysShow/private (legacy/fallback)
-      const blockIsAlwaysShow = alwaysShowByAnchor.has(current.anchor);
-      const blockIsPrivate = privateByAnchor.has(current.anchor);
-
-      // Get the set of line texts that are marked for this specific block
-      const markedAlwaysShowLines = alwaysShowBlockLines.get(current.anchor);
-      const markedPrivateLines = privateBlockLines.get(current.anchor);
-
-      // Check each line individually
-      for (const blockLine of current.block) {
-        const lineText = blockLine.text || '';
-
-        // Check if this specific line is marked as alwaysShow
-        // Either the entire block is marked, OR this specific line is in the marked set
-        const lineIsAlwaysShow = blockIsAlwaysShow || (markedAlwaysShowLines && markedAlwaysShowLines.has(lineText));
-        if (lineIsAlwaysShow) {
+      // If this block is alwaysShow, also add to alwaysShow set
+      if (alwaysShowAnchors.has(current.anchor)) {
+        for (const blockLine of current.block) {
           alwaysShowLines.add(blockLine.originalLineIndex);
         }
+      }
 
-        // Check if this specific line is marked as private
-        const lineIsPrivate = blockIsPrivate || (markedPrivateLines && markedPrivateLines.has(lineText));
-        if (lineIsPrivate) {
+      // If this block is private and we're keeping private, add to private set
+      if (privateAnchors.has(current.anchor)) {
+        for (const blockLine of current.block) {
           privateLines.add(blockLine.originalLineIndex);
         }
       }
     } else if (current.type === "inline") {
-      const currentText = current.text || '';
-
-      // Check alwaysShow by anchor OR text
-      const isAlwaysShow = alwaysShowByAnchor.has(current.anchor) ||
-                          (currentText && alwaysShowByText.has(currentText));
-      if (isAlwaysShow) {
+      if (alwaysShowAnchors.has(current.anchor)) {
         // For alwaysShow inline comments, store the line index and text
         alwaysShowLines.add(current.originalLineIndex);
         alwaysShowInlineComments.set(current.originalLineIndex, current.text || "");
       }
-
-      // Check private by anchor OR text
-      const isPrivate = privateByAnchor.has(current.anchor) ||
-                       (currentText && privateByText.has(currentText));
-      if (isPrivate) {
+      if (privateAnchors.has(current.anchor)) {
         // For private inline comments (if keeping), store the line index and text
         privateLines.add(current.originalLineIndex);
         privateInlineComments.set(current.originalLineIndex, current.text || "");
