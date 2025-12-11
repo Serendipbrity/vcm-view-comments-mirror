@@ -1776,21 +1776,11 @@ async function activate(context) {
           const isInCommentedMode = isCommentedMap.get(doc.uri.fsPath);
 
           if (isInCommentedMode) {
-            // In commented mode: show BOTH shared and private comments
-            // Strip ALL comments first, then inject both shared and private
-            const allCommentsForStripping = [...sharedComments, ...privateComments];
-            const cleanText = stripComments(text, doc.uri.path, allCommentsForStripping, false, false);
-
-            // Inject both shared and private comments
-            const allCommentsToInject = [...sharedComments, ...privateComments];
-            newText = injectComments(cleanText, allCommentsToInject, true);
+            // In commented mode: current text already has shared/alwaysShow; just add private
+            newText = injectComments(text, privateComments, true);
           } else {
-            // In clean mode: show ONLY private comments
-            // Strip any existing private comments first (to avoid double injection)
-            const cleanText = stripComments(text, doc.uri.path, privateComments, false, false);
-
-            // Inject only private comments
-            newText = injectComments(cleanText, privateComments, true);
+            // In clean mode: current text already has alwaysShow; just add private without toggling mode
+            newText = injectComments(text, privateComments, true);
           }
 
           privateCommentsVisible.set(doc.uri.fsPath, true);

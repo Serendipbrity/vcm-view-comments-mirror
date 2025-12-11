@@ -77,11 +77,15 @@ function processCommentSync({
 
     const claimMatch = (map, key) => {
       const candidates = map.get(key);
-      if (!candidates || candidates.length === 0) return null;
-      const candidate = candidates.find((c) => !matchedOther.has(c));
+      if (!candidates) return null;
+
+      // Normalize to array so we can safely search
+      const candidateList = Array.isArray(candidates) ? candidates : [candidates];
+      const candidate = candidateList.find((c) => !matchedOther.has(c));
       if (!candidate) return null;
+
       matchedOther.add(candidate);
-      const remaining = candidates.filter((c) => c !== candidate);
+      const remaining = candidateList.filter((c) => c !== candidate);
       if (remaining.length > 0) {
         map.set(key, remaining);
       } else {
