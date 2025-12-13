@@ -1,15 +1,31 @@
+// buildContextKey builds a unique lookup key for a comment using its identifying hashes 
+// so we can reliably match the same comment across the file, even when line numbers change.
+// It returns a 4-part fingerprint that looks like type:anchor:prevHash:nextHash
+// ex) inline:abc123:def456:ghi789
 function buildContextKey(comment) {
-  return `${comment.type}:${comment.anchor}:${comment.prevHash || "null"}:${
-    comment.nextHash || "null"
-  }`;
+  // comment.type separates logic for inline vs block comments.
+  // comment.anchor is the hash of the code line the comment is attached to.
+  // prev and next hash pinpoint any comments with identical anchors
+  return `${comment.type}: 
+          ${comment.anchor}:
+          ${comment.prevHash || "null"}:
+          ${comment.nextHash || "null"}`;
 }
 
 // ============================================================================
-// processCommentSync()
+// processCommentSync() determines:
 // ============================================================================
-// Reusable function for processing comment synchronization in both commented
-// and clean modes. Handles matching, deduplication, and property updates.
-// Used for both shared and private comments to eliminate code duplication.
+// what’s in the editor right now (docComments)
+// what’s in the VCM JSON (vcmComments)
+// what’s in the other VCM file (otherVCMComments: shared vs private)
+// and whether you’re in commented mode or clean mode
+
+// It decides how to:
+// preserve metadata (alwaysShow, anchors, etc.)
+// avoid shared/private cross-contamination
+// track clean-mode edits via text_cleanMode
+// update private comments correctly in clean mode
+// It returns the new array of comments that should be saved for this VCM.
 // ============================================================================
 function processCommentSync({
   isCommented, // boolean: true = commented mode, false = clean mode
@@ -21,13 +37,18 @@ function processCommentSync({
 }) {
 
 
-  // If just injected in clean mode, return existing comments unchanged
+  // If we are in clean mode and wasJustInjected is true → bail out, return vcmComments unchanged. 
+  // That prevents the “I just injected from VCM and now I think these are new clean-mode edits” bug.
   if (!isCommented && wasJustInjected) {
     return existingComments;
   }
 
   let finalComments;
 
+  // ========================================================================
+  // COMMENTED MODE: Replace VCM with current state, preserving metadata
+  // ========================================================================
+  // In commented mode, the source of truth is the document, not the VCM.
   if (isCommented) {
     // ========================================================================
     // COMMENTED MODE: Replace VCM with current state, preserving metadata
@@ -43,7 +64,9 @@ function processCommentSync({
       }
       existingByKey.get(key).push(existing);
 
-      // Index by text to handle anchor changes (store array to handle duplicates)
+      // This builds a text fingerprint for fallback matching.
+      // If anchors change (code moved, refactored), the hashes might not match anymore, but the comment text still does. 
+      // So we can use textKey as a secondary match.
       const textKey =
         existing.text ||
         (existing.block ? existing.block.map((b) => b.text).join("\n") : "");
@@ -51,8 +74,10 @@ function processCommentSync({
         existingByText.set(textKey, existing);
       }
     }
-
-    // Build map of "other" comments (private if processing shared, shared if processing private)
+    // ---------------------- Other VCM Comments -----------------------------------------
+    // This section is the same as above but for the "other" VCM comments
+    // If we’re syncing shared, otherVCMComments = private comments.
+    // If we’re syncing private, otherVCMComments = shared comments.
     const otherByKey = new Map();
     const otherByText = new Map();
     const matchedOther = new Set();
@@ -75,9 +100,10 @@ function processCommentSync({
       }
     }
 
+    // claimMatch ensures we don’t accidentally treat a single otherComment vcm object as multiple separate matches in one pass.
     const claimMatch = (map, key) => {
-      const candidates = map.get(key);
-      if (!candidates) return null;
+      const candidates = map.get(key); // Fetch all “other” comments with that context key.
+      if (!candidates) return null; // If none found, return null.
 
       // Normalize to array so we can safely search
       const candidateList = Array.isArray(candidates) ? candidates : [candidates];
@@ -163,7 +189,9 @@ function processCommentSync({
     // If a comment isn't in the current document, it was deleted
   } else {
     // ========================================================================
-    // CLEAN MODE: Preserve hidden VCM comments, track new ones via text_cleanMode (shared) or direct update (private)
+    // CLEAN MODE: Preserve hidden shared VCM comments, track new ones via text_cleanMode (shared) or direct update (private)
+    //  source of truth are vcm's
+    // # TODO text_cleanMode should be able to be marked always show or private and removed from shared and added to private 
     // ========================================================================
 
     // Build map of existing comments by anchor + context hashes
