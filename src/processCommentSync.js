@@ -1,16 +1,4 @@
-// buildContextKey builds a unique lookup key for a comment using its identifying hashes 
-// so we can reliably match the same comment across the file, even when line numbers change.
-// It returns a 4-part fingerprint that looks like type:anchor:prevHash:nextHash
-// ex) inline:abc123:def456:ghi789
-function buildContextKey(comment) {
-  // comment.type separates logic for inline vs block comments.
-  // comment.anchor is the hash of the code line the comment is attached to.
-  // prev and next hash pinpoint any comments with identical anchors
-  return `${comment.type}: 
-          ${comment.anchor}:
-          ${comment.prevHash || "null"}:
-          ${comment.nextHash || "null"}`;
-}
+const { buildContextKey } = require("./buildContextKey");
 
 // ============================================================================
 // processCommentSync() determines:
@@ -18,14 +6,13 @@ function buildContextKey(comment) {
 // what’s in the editor right now (docComments)
 // what’s in the VCM JSON (vcmComments)
 // what’s in the other VCM file (otherVCMComments: shared vs private)
-// and whether you’re in commented mode or clean mode
 
 // It decides how to:
 // preserve metadata (alwaysShow, anchors, etc.)
 // avoid shared/private cross-contamination
 // track clean-mode edits via text_cleanMode
 // update private comments correctly in clean mode
-// It returns the new array of comments that should be saved for this VCM.
+// It Returns: “here are the updated comments that should be saved back into this VCM”.
 // ============================================================================
 function processCommentSync({
   isCommented, // boolean: true = commented mode, false = clean mode
@@ -202,9 +189,7 @@ function processCommentSync({
     // Build map of the current vcm's comments by anchor + context hashes
     const vcmComByKEY = new Map();
     for (const comment of vcmComments) {
-      const key = `${comment.type}:${comment.anchor}:${
-        comment.prevHash || "null"
-      }:${comment.nextHash || "null"}`;
+      const key = buildContextKey(comment);
       if (!vcmComByKEY.has(key)) {
         vcmComByKEY.set(key, []);
       }
@@ -215,9 +200,7 @@ function processCommentSync({
     const otherKeys = new Set();
     const otherTexts = new Set();
     for (const otherComment of otherVCMComments) {
-      const key = `${otherComment.type}:${otherComment.anchor}:${
-        otherComment.prevHash || "null"
-      }:${otherComment.nextHash || "null"}`;
+      const key = buildContextKey(otherComment);
       otherKeys.add(key);
 
       const textKey =
@@ -251,9 +234,7 @@ function processCommentSync({
 
       // Process current comments
       for (const current of docComments) {
-        const key = `${current.type}:${current.anchor}:${
-          current.prevHash || "null"
-        }:${current.nextHash || "null"}`;
+        const key = buildContextKey(current);
         const currentText =
           current.text ||
           (current.block ? current.block.map((b) => b.text).join("\n") : "");
@@ -335,9 +316,7 @@ function processCommentSync({
 
       // Process current comments (typed in clean mode)
       for (const current of docComments) {
-        const key = `${current.type}:${current.anchor}:${
-          current.prevHash || "null"
-        }:${current.nextHash || "null"}`;
+        const key = buildContextKey(current);
         const currentText =
           current.text ||
           (current.block ? current.block.map((b) => b.text).join("\n") : "");

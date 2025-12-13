@@ -1,14 +1,10 @@
-const { getCommentMarkersForFile } = require("./commentMarkers");
+const { buildContextKey } = require("./buildContextKey");
 
 function createDetectors({
   loadAllComments,
   extractComments,
   vscode,
 }) {
-
-  // Reuse key format everywhere for consistency
-  const keyFor = (c) =>
-    `${c.type}:${c.anchor}:${c.prevHash || "null"}:${c.nextHash || "null"}`;
 
   const isAlwaysShow = (c) =>
     c.alwaysShow || (c.block && c.block.some((b) => b.alwaysShow));
@@ -39,13 +35,13 @@ function createDetectors({
 
       // Use the FIRST toggleable shared comment as the detection anchor.
       const anchorShared = toggleableShared[0];
-      const anchorKey = keyFor(anchorShared);
+      const anchorKey = buildContextKey(anchorShared);
 
       const text = doc.getText();
       const docComments = extractComments(text, doc.uri.path);
 
       // 1) Strong match: by anchor key
-      const foundByKey = docComments.some((c) => keyFor(c) === anchorKey);
+      const foundByKey = docComments.some((c) => buildContextKey(c) === anchorKey);
       if (foundByKey) {
         return true; // commented mode
       }
@@ -100,7 +96,7 @@ function createDetectors({
 
       // Only check the first private comment for efficiency (if one is visible, they all should be)
       const firstPrivate = privateComments[0];
-      const firstPrivateKey = keyFor(firstPrivate);
+      const firstPrivateKey = buildContextKey(firstPrivate);
       const firstPrivateText =
         firstPrivate.text ||
         (firstPrivate.block
@@ -109,7 +105,7 @@ function createDetectors({
 
       // Check if the first private comment exists in current document
       for (const current of docComments) {
-        const currentKey = keyFor(current);
+        const currentKey = buildContextKey(current);
 
         // Match by key (exact anchor match)
         if (currentKey === firstPrivateKey) {

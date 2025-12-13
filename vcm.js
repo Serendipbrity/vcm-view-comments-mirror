@@ -14,6 +14,7 @@ const { hashLine } = require("./src/hash");
 const { extractComments, injectComments, stripComments } = require("./src/commentTransforms");
 const { processCommentSync } = require("./src/processCommentSync");
 const { createDetectors } = require("./src/detection");
+const { buildContextKey } = require("./src/buildContextKey");
 
 // Global state variables for the extension
 let vcmEditor;           // Reference to the VCM split view editor
@@ -1321,7 +1322,7 @@ async function activate(context) {
         }
 
         // Build the key using ALL hashes for this comment
-        const commentKey = `${commentAtCursor.type}:${commentAtCursor.anchor}:${commentAtCursor.prevHash || 'null'}:${commentAtCursor.nextHash || 'null'}`;
+        const commentKey = buildContextKey(commentAtCursor);
 
         // Load or create VCM comments
         let comments = [];
@@ -1337,7 +1338,7 @@ async function activate(context) {
 
           // For inline comments, also match on text to distinguish between multiple inline comments with same hashes
           const targetVcmComment = comments.find(vcm => {
-            const vcmKey = `${vcm.type}:${vcm.anchor}:${vcm.prevHash || 'null'}:${vcm.nextHash || 'null'}`;
+            const vcmKey = buildContextKey(vcm);
             if (vcmKey !== commentKey) return false;
 
             // If this is an inline comment, also match on the text to be more specific
@@ -1672,7 +1673,7 @@ async function activate(context) {
         if (currentlyVisible) {
           // Hide private comments - remove ONLY private comments using anchor + context hashes
           const privateKeys = new Set(privateComments.map(c =>
-            `${c.type}:${c.anchor}:${c.prevHash || 'null'}:${c.nextHash || 'null'}`
+            buildContextKey(c)
           ));
 
           // Extract current comments to identify which ones are private
@@ -1683,7 +1684,7 @@ async function activate(context) {
           const privateInlinesToRemove = [];
 
           for (const current of docComments) {
-            const currentKey = `${current.type}:${current.anchor}:${current.prevHash || 'null'}:${current.nextHash || 'null'}`;
+            const currentKey = buildContextKey(current);
             if (privateKeys.has(currentKey)) {
               if (current.type === "block") {
                 privateBlocksToRemove.push(current);
