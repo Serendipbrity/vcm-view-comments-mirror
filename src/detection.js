@@ -90,7 +90,7 @@ function createDetectors({
       const { privateComments } = await loadAllComments(relativePath);
 
       // If no private comments exist, return false (nothing to show)
-      if (privateComments.length === 0) {
+      if (!privateComments || privateComments.length === 0) {
         return false;
       }
 
@@ -100,9 +100,7 @@ function createDetectors({
 
       // Only check the first private comment for efficiency (if one is visible, they all should be)
       const firstPrivate = privateComments[0];
-      const firstPrivateKey = `${firstPrivate.type}:${firstPrivate.anchor}:${
-        firstPrivate.prevHash || "null"
-      }:${firstPrivate.nextHash || "null"}`;
+      const firstPrivateKey = keyFor(firstPrivate);
       const firstPrivateText =
         firstPrivate.text ||
         (firstPrivate.block
@@ -111,9 +109,7 @@ function createDetectors({
 
       // Check if the first private comment exists in current document
       for (const current of docComments) {
-        const currentKey = `${current.type}:${current.anchor}:${
-          current.prevHash || "null"
-        }:${current.nextHash || "null"}`;
+        const currentKey = keyFor(current);
 
         // Match by key (exact anchor match)
         if (currentKey === firstPrivateKey) {
@@ -134,8 +130,9 @@ function createDetectors({
       // First private comment not found in document
       return false;
     } catch (error) {
-      // If we can't detect (no VCM file, etc.), default to hidden
-      return false;
+      // On failure, err on the side of NOT hiding anything.
+      // Treat private as visible so no "hide private" operation runs based on bad detection.
+      return true;
     }
   }
 
