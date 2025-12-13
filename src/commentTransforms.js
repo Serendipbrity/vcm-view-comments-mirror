@@ -506,7 +506,7 @@ function stripComments(text, filePath, vcmComments = [], keepPrivate = false, is
 
   // Extract current comments to identify blank lines within comment blocks
   // Pass vcmComments and mode so blank line extraction works correctly
-  const currentComments = extractComments(text, filePath, vcmComments, isCleanMode);
+  const docComments = extractComments(text, filePath, vcmComments, isCleanMode);
 
   // Build sets for tracking lines
   const allCommentBlockLines = new Set();
@@ -515,7 +515,7 @@ function stripComments(text, filePath, vcmComments = [], keepPrivate = false, is
   const privateLines = new Set();
   const privateInlineComments = new Map();
 
-  for (const current of currentComments) {
+  for (const current of docComments) {
     if (current.type === "block" && current.block) {
       // Track all lines in all comment blocks (including blank lines WITHIN them)
       // But DO NOT track leading/trailing blank lines - those should stay visible in ALL modes

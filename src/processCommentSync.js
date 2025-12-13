@@ -29,9 +29,9 @@ function buildContextKey(comment) {
 // ============================================================================
 function processCommentSync({
   isCommented, // boolean: true = commented mode, false = clean mode
-  currentComments, // array: comments extracted from current document
-  existingComments, // array: comments from VCM file (will be modified in place for clean mode)
-  otherComments = [], // array: comments from other VCM (to detect cross-contamination)
+  docComments, // array: comments extracted from current document
+  vcmComments, // array: comments from current VCM file (will be modified in place for clean mode)
+  otherVCMComments = [], // array: comments from other VCM (to detect cross-contamination)
   isPrivateMode = false, // boolean: true = processing private comments, false = shared
   wasJustInjected = false, // boolean: skip processing in clean mode if just injected
 }) {
@@ -40,7 +40,7 @@ function processCommentSync({
   // If we are in clean mode and wasJustInjected is true → bail out, return vcmComments unchanged. 
   // That prevents the “I just injected from VCM and now I think these are new clean-mode edits” bug.
   if (!isCommented && wasJustInjected) {
-    return existingComments;
+    return vcmComments;
   }
 
   let finalComments;
@@ -50,28 +50,35 @@ function processCommentSync({
   // ========================================================================
   // In commented mode, the source of truth is the document, not the VCM.
   if (isCommented) {
-    // ========================================================================
-    // COMMENTED MODE: Replace VCM with current state, preserving metadata
-    // ========================================================================
-
-    // Build map of existing comments by anchor
-    const existingByKey = new Map();
-    const existingByText = new Map();
-    for (const existing of existingComments) {
-      const key = buildContextKey(existing);
-      if (!existingByKey.has(key)) {
-        existingByKey.set(key, []);
+    // ---------------------- Current VCM Comments (Shared or Private VCM) -----------------------------------------
+    // Build map of current vcm comments by anchor for the current vcm (shared or private depending on which file we are syncing rn)
+    const vcmComByKEY = new Map(); // context key catches same location, even if identical text occurs elsewhere.
+    const vcmComByTEXT = new Map(); // text mapping catches same comment if its anchor changed (code moved).
+    for (const comment of vcmComments) { // loop over vcm comments
+      // build key for each vcm comment
+      // This is what lets us say “this vcm comment corresponds to that current comment in the doc.”
+      const key = buildContextKey(comment); 
+      if (!vcmComByKEY.has(key)) { // If this context key hasn’t been seen yet:
+        // Initialize it to an empty array. because multiple comments could share the same key. like duplicating comments through the file
+        // We treat it as a queue of candidates instead of assuming 1-to-1.
+        vcmComByKEY.set(key, []); 
       }
-      existingByKey.get(key).push(existing);
+      // Append this vcm comment to the array for that context key.
+      // vcmComByKEY looks like: "inline:abc123:def456:ghi789" -> [comment1, comment2, ...]
+      vcmComByKEY.get(key).push(comment);
 
       // This builds a text fingerprint for fallback matching.
       // If anchors change (code moved, refactored), the hashes might not match anymore, but the comment text still does. 
       // So we can use textKey as a secondary match.
       const textKey =
-        existing.text ||
-        (existing.block ? existing.block.map((b) => b.text).join("\n") : "");
-      if (textKey && !existingByText.has(textKey)) {
-        existingByText.set(textKey, existing);
+        // If it’s an inline comment: comment.text is the actual comment string. Use that.
+        // comment.text = vcmObject.text = inline comment
+        comment.text ||
+        // If it’s a block comment: join all the block parts into one string for matching else ignore it if not present.
+        (comment.block ? comment.block.map((b) => b.text).join("\n") : "");
+      // if we got a textKey and it’s not already in the map:
+      if (textKey && !vcmComByTEXT.has(textKey)) {
+        vcmComByTEXT.set(textKey, comment); // Map the textKey to this vcm comment.
       }
     }
     // ---------------------- Other VCM Comments -----------------------------------------
@@ -80,9 +87,8 @@ function processCommentSync({
     // If we’re syncing private, otherVCMComments = shared comments.
     const otherByKey = new Map();
     const otherByText = new Map();
-    const matchedOther = new Set();
 
-    for (const otherComment of otherComments) {
+    for (const otherComment of otherVCMComments) {
       const key = buildContextKey(otherComment);
       if (!otherByKey.has(key)) {
         otherByKey.set(key, []);
@@ -98,7 +104,9 @@ function processCommentSync({
       if (textKey && !otherByText.has(textKey)) {
         otherByText.set(textKey, otherComment);
       }
-    }
+    } // ---------------------------------------------------------------
+    const matchedVCMComments = new Set(); // Track which current vcm comments we've matched
+    const matchedOtherVCMComments = new Set(); // Track which of the other vcm comments we've matched
 
     // claimMatch ensures we don’t accidentally treat a single otherComment vcm object as multiple separate matches in one pass.
     const claimMatch = (map, key) => {
@@ -107,24 +115,21 @@ function processCommentSync({
 
       // Normalize to array so we can safely search
       const candidateList = Array.isArray(candidates) ? candidates : [candidates];
-      const candidate = candidateList.find((c) => !matchedOther.has(c));
+      // Pick the first one that hasn’t been used yet. matchedOtherVCMComments is a Set of “other comments we already matched”.
+      const candidate = candidateList.find((c) => !matchedOtherVCMComments.has(c));
       if (!candidate) return null;
-
-      matchedOther.add(candidate);
-      const remaining = candidateList.filter((c) => c !== candidate);
+      matchedOtherVCMComments.add(candidate); // Mark this one as claimed
+      const remaining = candidateList.filter((c) => c !== candidate); // remove it from the map
       if (remaining.length > 0) {
         map.set(key, remaining);
       } else {
-        map.delete(key);
+        map.delete(key); // remove it from the map
       }
       return candidate;
     };
 
-    // Track which existing comments we've matched
-    const matchedExisting = new Set();
-
-    // Process current comments and match with existing to preserve metadata
-    finalComments = currentComments.map((current) => {
+    // Process current doc comments and match with current vcm (shared or private) to preserve metadata
+    finalComments = docComments.map((current) => {
       const key = buildContextKey(current);
       const currentText =
         current.text ||
@@ -152,14 +157,14 @@ function processCommentSync({
       }
 
       // Not from other VCM - check this VCM's existing comments for metadata
-      const candidates = existingByKey.get(key) || [];
+      const candidates = vcmComByKEY.get(key) || [];
       if (candidates.length > 0) {
         // Found match by anchor - preserve metadata
         const existing = candidates[0];
-        matchedExisting.add(existing);
+        matchedVCMComments.add(existing);
         candidates.shift();
         if (candidates.length === 0) {
-          existingByKey.delete(key);
+          vcmComByKEY.delete(key);
         }
 
         return {
@@ -170,10 +175,10 @@ function processCommentSync({
       }
 
       // No match by anchor - try matching by text (anchor might have changed)
-      if (currentText && existingByText.has(currentText)) {
-        const existing = existingByText.get(currentText);
-        if (!matchedExisting.has(existing)) {
-          matchedExisting.add(existing);
+      if (currentText && vcmComByTEXT.has(currentText)) {
+        const existing = vcmComByTEXT.get(currentText);
+        if (!matchedVCMComments.has(existing)) {
+          matchedVCMComments.add(existing);
           return {
             ...current,
             alwaysShow: existing.alwaysShow || undefined,
@@ -194,22 +199,22 @@ function processCommentSync({
     // # TODO text_cleanMode should be able to be marked always show or private and removed from shared and added to private 
     // ========================================================================
 
-    // Build map of existing comments by anchor + context hashes
-    const existingByKey = new Map();
-    for (const existing of existingComments) {
-      const key = `${existing.type}:${existing.anchor}:${
-        existing.prevHash || "null"
-      }:${existing.nextHash || "null"}`;
-      if (!existingByKey.has(key)) {
-        existingByKey.set(key, []);
+    // Build map of the current vcm's comments by anchor + context hashes
+    const vcmComByKEY = new Map();
+    for (const comment of vcmComments) {
+      const key = `${comment.type}:${comment.anchor}:${
+        comment.prevHash || "null"
+      }:${comment.nextHash || "null"}`;
+      if (!vcmComByKEY.has(key)) {
+        vcmComByKEY.set(key, []);
       }
-      existingByKey.get(key).push(existing);
+      vcmComByKEY.get(key).push(comment);
     }
 
     // Build set of "other" comment keys for filtering
     const otherKeys = new Set();
     const otherTexts = new Set();
-    for (const otherComment of otherComments) {
+    for (const otherComment of otherVCMComments) {
       const key = `${otherComment.type}:${otherComment.anchor}:${
         otherComment.prevHash || "null"
       }:${otherComment.nextHash || "null"}`;
@@ -231,21 +236,21 @@ function processCommentSync({
       // ====================================================================
 
       // Build map by text for matching
-      const existingByText = new Map();
-      for (const existing of existingComments) {
+      const vcmComByTEXT = new Map();
+      for (const existing of vcmComments) {
         const textKey =
           existing.text ||
           (existing.block ? existing.block.map((b) => b.text).join("\n") : "");
-        if (textKey && !existingByText.has(textKey)) {
-          existingByText.set(textKey, existing);
+        if (textKey && !vcmComByTEXT.has(textKey)) {
+          vcmComByTEXT.set(textKey, existing);
         }
       }
 
       // Track which existing comments we've matched
-      const matchedExisting = new Set();
+      const matchedVCMComments = new Set();
 
       // Process current comments
-      for (const current of currentComments) {
+      for (const current of docComments) {
         const key = `${current.type}:${current.anchor}:${
           current.prevHash || "null"
         }:${current.nextHash || "null"}`;
@@ -260,11 +265,11 @@ function processCommentSync({
 
         // Match by text first (handles when comment moves)
         let existing = null;
-        if (currentText && existingByText.has(currentText)) {
-          const candidate = existingByText.get(currentText);
-          if (!matchedExisting.has(candidate)) {
+        if (currentText && vcmComByTEXT.has(currentText)) {
+          const candidate = vcmComByTEXT.get(currentText);
+          if (!matchedVCMComments.has(candidate)) {
             existing = candidate;
-            matchedExisting.add(existing);
+            matchedVCMComments.add(existing);
             // Update anchor to new position
             existing.anchor = current.anchor;
             existing.prevHash = current.prevHash;
@@ -282,10 +287,10 @@ function processCommentSync({
 
         // If no text match, try anchor match
         if (!existing) {
-          const candidates = existingByKey.get(key) || [];
-          if (candidates.length > 0 && !matchedExisting.has(candidates[0])) {
+          const candidates = vcmComByKEY.get(key) || [];
+          if (candidates.length > 0 && !matchedVCMComments.has(candidates[0])) {
             existing = candidates[0];
-            matchedExisting.add(existing);
+            matchedVCMComments.add(existing);
             // Update content
             existing.text = current.text;
             existing.block = current.block;
@@ -297,21 +302,21 @@ function processCommentSync({
 
         // If still no match, add as new
         if (!existing) {
-          existingComments.push(current);
-          matchedExisting.add(current);
+          vcmComments.push(current);
+          matchedVCMComments.add(current);
         }
       }
 
       // Return all existing comments (updated in place)
-      finalComments = existingComments;
+      finalComments = vcmComments;
     } else {
       // ====================================================================
       // SHARED MODE IN CLEAN: Track changes via text_cleanMode
       // ====================================================================
 
       // Build map by text_cleanMode content for matching
-      const existingByTextCleanMode = new Map();
-      for (const existing of existingComments) {
+      const vcmComByTEXTCleanMode = new Map();
+      for (const existing of vcmComments) {
         if (existing.text_cleanMode) {
           const textKey =
             typeof existing.text_cleanMode === "string"
@@ -319,8 +324,8 @@ function processCommentSync({
               : Array.isArray(existing.text_cleanMode)
               ? existing.text_cleanMode.map((b) => b.text).join("\n")
               : "";
-          if (textKey && !existingByTextCleanMode.has(textKey)) {
-            existingByTextCleanMode.set(textKey, existing);
+          if (textKey && !vcmComByTEXTCleanMode.has(textKey)) {
+            vcmComByTEXTCleanMode.set(textKey, existing);
           }
         }
       }
@@ -329,7 +334,7 @@ function processCommentSync({
       const matchedInCleanMode = new Set();
 
       // Process current comments (typed in clean mode)
-      for (const current of currentComments) {
+      for (const current of docComments) {
         const key = `${current.type}:${current.anchor}:${
           current.prevHash || "null"
         }:${current.nextHash || "null"}`;
@@ -347,8 +352,8 @@ function processCommentSync({
         // BUT: Only skip if this text matches other comment AND doesn't match any existing comment
         const isOtherCommentText = otherTexts.has(textKey);
         const isExistingCommentText =
-          existingByTextCleanMode.has(currentText) ||
-          existingComments.some((ec) => {
+          vcmComByTEXTCleanMode.has(currentText) ||
+          vcmComments.some((ec) => {
             const ecText = ec.text || "";
             return ecText === currentText;
           });
@@ -362,8 +367,8 @@ function processCommentSync({
         let existing = null;
 
         // First, try to match by text_cleanMode content (handles anchor changes)
-        if (currentText && existingByTextCleanMode.has(currentText)) {
-          const candidate = existingByTextCleanMode.get(currentText);
+        if (currentText && vcmComByTEXTCleanMode.has(currentText)) {
+          const candidate = vcmComByTEXTCleanMode.get(currentText);
           if (!matchedInCleanMode.has(candidate)) {
             existing = candidate;
             matchedInCleanMode.add(existing);
@@ -376,7 +381,7 @@ function processCommentSync({
 
         // If no text match, try anchor match (for VCM comments)
         if (!existing) {
-          const candidates = existingByKey.get(key) || [];
+          const candidates = vcmComByKEY.get(key) || [];
           if (candidates.length > 0 && !matchedInCleanMode.has(candidates[0])) {
             existing = candidates[0];
             matchedInCleanMode.add(existing);
@@ -414,16 +419,16 @@ function processCommentSync({
             newComment.text_cleanMode = current.block;
             delete newComment.block;
           }
-          existingComments.push(newComment);
+          vcmComments.push(newComment);
           matchedInCleanMode.add(newComment);
         }
       }
 
       // Remove text_cleanMode from comments that were deleted in clean mode
-      for (const existing of existingComments) {
+      for (const existing of vcmComments) {
         if (existing.text_cleanMode) {
           const key = `${existing.type}:${existing.anchor}`;
-          const stillExists = currentComments.some(
+          const stillExists = docComments.some(
             (c) => `${c.type}:${c.anchor}` === key
           );
 
@@ -434,7 +439,7 @@ function processCommentSync({
         }
       }
 
-      finalComments = existingComments;
+      finalComments = vcmComments;
     }
   }
 

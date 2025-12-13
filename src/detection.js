@@ -3,13 +3,12 @@ const { getCommentMarkersForFile } = require("./commentMarkers");
 function createDetectors({
   loadAllComments,
   extractComments,
-  hashLine,
   vscode,
 }) {
   // Detect initial state: are comments visible or hidden?
   // Returns: true if comments are visible (isCommented), false if in clean mode
-  async function detectInitialMode(doc, vcmDir) {
-    // get file path relative to workspace root
+  async function detectInitialMode(doc) {
+    // get file path relative to workspace root e.g. src/file.ts instead of full file:///...)
     const relativePath = vscode.workspace.asRelativePath(doc.uri);
 
     try {
@@ -18,14 +17,17 @@ function createDetectors({
       // - If shared comments are visible → commented mode
       // - If only private (or no comments) → clean mode
       const { sharedComments = [], privateComments = [] } = await loadAllComments(relativePath);
-      const comments = sharedComments || [];
+      const comments = sharedComments || []; // a convenience alias for sharedComments.
 
       const keyFor = (c) => `${c.type}:${c.anchor}:${c.prevHash || 'null'}:${c.nextHash || 'null'}`;
       const privateKeys = new Set(privateComments.map(keyFor));
       const alwaysShowKeys = new Set();
       for (const sc of sharedComments) {
+        // check for inline or block alwaysShow
         const hasAlwaysShow = sc.alwaysShow || (sc.block && sc.block.some(b => b.alwaysShow));
+        // If any shared comment is marked alwaysShow
         if (hasAlwaysShow) {
+          // add to set
           alwaysShowKeys.add(keyFor(sc));
         }
       }
@@ -33,8 +35,8 @@ function createDetectors({
       // Fallback/fast-path: if the document currently contains comments that are NOT
       // private (from VCM) and NOT alwaysShow (from shared VCM), treat it as commented mode.
       const text = doc.getText();
-      const currentComments = extractComments(text, doc.uri.path);
-      const filteredCurrent = currentComments.filter(c => {
+      const docComments = extractComments(text, doc.uri.path);
+      const filteredCurrent = docComments.filter(c => {
         const key = keyFor(c);
         return !privateKeys.has(key) && !alwaysShowKeys.has(key);
       });
@@ -90,10 +92,10 @@ function createDetectors({
       }
 
       // Extract current comments (only what we need for comparison)
-      const currentCommentsForCheck = extractComments(text, doc.uri.path);
+      const docCommentsForCheck = extractComments(text, doc.uri.path);
 
       // Filter current comments to only non-private ones
-      const currentNonPrivateComments = currentCommentsForCheck.filter((c) => {
+      const currentNonPrivateComments = docCommentsForCheck.filter((c) => {
         if (c.type === "inline") {
           return !privateTexts.has(c.text);
         } else if (c.block) {
@@ -190,7 +192,7 @@ function createDetectors({
 
       // Extract current comments from document (only need to check if ONE exists)
       const text = doc.getText();
-      const currentComments = extractComments(text, doc.uri.path);
+      const docComments = extractComments(text, doc.uri.path);
 
       // Only check the first private comment for efficiency (if one is visible, they all should be)
       const firstPrivate = privateComments[0];
@@ -204,7 +206,7 @@ function createDetectors({
           : "");
 
       // Check if the first private comment exists in current document
-      for (const current of currentComments) {
+      for (const current of docComments) {
         const currentKey = `${current.type}:${current.anchor}:${
           current.prevHash || "null"
         }:${current.nextHash || "null"}`;

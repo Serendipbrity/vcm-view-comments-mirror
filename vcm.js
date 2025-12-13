@@ -214,8 +214,8 @@ async function activate(context) {
           // For inline comments, also verify we're on the correct line
           if (c.type === "inline" && isInlineComment) {
             // Extract current comments and match by line
-            const currentComments = extractComments(doc.getText(), doc.uri.path);
-            const matchingCurrent = currentComments.find(curr =>
+            const docComments = extractComments(doc.getText(), doc.uri.path);
+            const matchingCurrent = docComments.find(curr =>
               curr.anchor === anchorHash && curr.originalLineIndex === selectedLine
             );
             if (matchingCurrent) {
@@ -430,7 +430,7 @@ async function activate(context) {
     const text = doc.getText();
 
     // Load existing VCM data from both shared and private files
-    const { sharedComments: existingComments, privateComments: existingPrivateComments } = await loadAllComments(relativePath);
+    const { sharedComments: vcmComments, privateComments: existingPrivateComments } = await loadAllComments(relativePath);
 
     // Get the current mode from our state map
     // IMPORTANT: Once mode is set, it should NEVER change except via manual toggle or undo/redo
@@ -457,8 +457,8 @@ async function activate(context) {
     // Pass mode and ALL existing comments (shared + private) so blank lines are handled correctly
     // This is critical for proper matching when private comments are visible in clean mode
     const isCleanMode = !isCommented;
-    const allExistingComments = [...existingComments, ...existingPrivateComments];
-    const currentComments = extractComments(text, doc.uri.path, allExistingComments, isCleanMode, debugAnchorText);
+    const allvcmComments = [...vcmComments, ...existingPrivateComments];
+    const docComments = extractComments(text, doc.uri.path, allvcmComments, isCleanMode, debugAnchorText);
 
     // ------------------------------------------------------------------------
     // Merge Strategy - Using processCommentSync for both shared and private
@@ -467,9 +467,9 @@ async function activate(context) {
     // Process shared comments (these may include isPrivate flags in commented mode)
     let finalComments = processCommentSync({
       isCommented,
-      currentComments,
-      existingComments,
-      otherComments: existingPrivateComments,
+      docComments,
+      vcmComments,
+      otherVCMComments: existingPrivateComments,
       isPrivateMode: false,
       wasJustInjected,
     });
@@ -477,9 +477,9 @@ async function activate(context) {
     // Process private comments (updates anchors and content)
     processCommentSync({
       isCommented,
-      currentComments,
-      existingComments: existingPrivateComments,
-      otherComments: existingComments,
+      docComments,
+      vcmComments: existingPrivateComments,
+      otherVCMComments: vcmComments,
       isPrivateMode: true,
       wasJustInjected,
     });
@@ -1017,8 +1017,8 @@ async function activate(context) {
           comments = allComments;
 
           // Extract current comments to get fresh prevHash/nextHash
-          const currentComments = extractComments(doc.getText(), doc.uri.path);
-          const currentCandidates = currentComments.filter(c => c.anchor === anchorHash);
+          const docComments = extractComments(doc.getText(), doc.uri.path);
+          const currentCandidates = docComments.filter(c => c.anchor === anchorHash);
 
           if (currentCandidates.length === 0) {
             vscode.window.showWarningMessage("VCM: Could not find a matching comment entry in current file.");
@@ -1208,8 +1208,8 @@ async function activate(context) {
           const edit = new vscode.WorkspaceEdit();
 
           // For block comments, we need to find all lines in the block
-          const currentComments = extractComments(doc.getText(), doc.uri.path);
-          const matchingComment = currentComments.find(c => c.anchor === anchorHash);
+          const docComments = extractComments(doc.getText(), doc.uri.path);
+          const matchingComment = docComments.find(c => c.anchor === anchorHash);
 
           if (matchingComment) {
             if (matchingComment.type === "block" && matchingComment.block) {
@@ -1298,10 +1298,10 @@ async function activate(context) {
 
       try {
         // Extract current comments to get the comment at cursor with its hashes
-        const currentComments = extractComments(doc.getText(), doc.uri.path);
+        const docComments = extractComments(doc.getText(), doc.uri.path);
 
         // Find the comment at the cursor position to get its hashes
-        const commentAtCursor = currentComments.find(c => {
+        const commentAtCursor = docComments.find(c => {
           if (isInlineComment) {
             return c.type === "inline" && c.originalLineIndex === selectedLine;
           } else {
@@ -1514,8 +1514,8 @@ async function activate(context) {
         }
 
         // Extract current comments to match by context
-        const currentComments = extractComments(doc.getText(), doc.uri.path);
-        const currentCandidates = currentComments.filter(c => c.anchor === anchorHash);
+        const docComments = extractComments(doc.getText(), doc.uri.path);
+        const currentCandidates = docComments.filter(c => c.anchor === anchorHash);
 
         if (currentCandidates.length === 0) {
           vscode.window.showWarningMessage("VCM: Could not find a matching comment entry in current file.");
@@ -1676,13 +1676,13 @@ async function activate(context) {
           ));
 
           // Extract current comments to identify which ones are private
-          const currentComments = extractComments(text, doc.uri.path);
+          const docComments = extractComments(text, doc.uri.path);
 
           // Build a map of private comments by type and anchor for removal
           const privateBlocksToRemove = [];
           const privateInlinesToRemove = [];
 
-          for (const current of currentComments) {
+          for (const current of docComments) {
             const currentKey = `${current.type}:${current.anchor}:${current.prevHash || 'null'}:${current.nextHash || 'null'}`;
             if (privateKeys.has(currentKey)) {
               if (current.type === "block") {
