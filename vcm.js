@@ -984,10 +984,10 @@ async function activate(context) {
 
         // Load or create VCM comments
         let comments = [];
-        const { allComments } = await loadAllComments(relativePath);
+        const { allComments, sharedComments } = await loadAllComments(relativePath);
 
-        if (allComments.length === 0) {
-          // No VCM exists - extract only the specific comment being marked
+        // If no shared VCM exists - extract ALL comments and mark the target as alwaysShow
+        if (!sharedComments || sharedComments.length === 0) {
           const allExtractedComments = buildVCMObjects(doc.getText(), doc.uri.path);
 
           // Find all comments with matching anchor
@@ -1012,7 +1012,8 @@ async function activate(context) {
           // Only add the specific comment being marked as always show
           targetComment.alwaysShow = true;
 
-          comments = [targetComment];
+          // Save the entire extracted set so shared VCM has all comments
+          comments = allExtractedComments;
         } else {
           // VCM exists - mark the comment in existing list using context matching
           comments = allComments;
