@@ -1,7 +1,15 @@
 const { getCommentMarkersForFile } = require("./commentMarkers");
 const { hashLine } = require("./hash");
 
-function extractComments(text, filePath, existingVCMComments = null, isCleanMode = false, debugAnchorText = false) {
+// ===========================================================
+// buildVCMObjects
+// ===========================================================
+// This builds the raw, current, real-time comment objects extracted from the document
+// and generates their anchors / hashes
+// type: "inline" or "block"
+// exact text + line indices
+// anchor, prevHash, nextHash
+function buildVCMObjects(text, filePath, debugAnchorText = false) {
   const lines = text.split("\n"); // Splits file text into an array of individual lines.
   const comments = [];      // Final array of all extracted comments
   let commentBuffer = [];   // Temporary holding area for consecutive comment lines
@@ -187,7 +195,7 @@ function injectComments(cleanText, comments, includePrivate = false) {
 
   // Include/exclude private comments based on if includePrivate is toggled on or off
   const commentsToInject = comments.filter(c => {
-    if (c.alwaysShow) return false; // Always exclude alwaysShow (managed separately)
+    if (c.alwaysShow) return false; // Always exclude alwaysShow so no. double injection because they were never removed
     if (c.isPrivate && !includePrivate) return false; // Exclude private if not explicitly included
     return true;
   });
@@ -504,9 +512,10 @@ function stripComments(text, filePath, vcmComments = [], keepPrivate = false, is
     }
   }
 
+  // # TODO revisit this for the spacing stuff
   // Extract current comments to identify blank lines within comment blocks
   // Pass vcmComments and mode so blank line extraction works correctly
-  const docComments = extractComments(text, filePath, vcmComments, isCleanMode);
+  const docComments = buildVCMObjects(text, filePath, vcmComments, isCleanMode);
 
   // Build sets for tracking lines
   const allCommentBlockLines = new Set();
@@ -599,7 +608,7 @@ function stripComments(text, filePath, vcmComments = [], keepPrivate = false, is
 }
 
 module.exports = {
-  extractComments,
+  buildVCMObjects,
   injectComments,
   stripComments,
 };

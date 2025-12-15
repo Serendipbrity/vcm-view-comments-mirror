@@ -2,7 +2,7 @@ const { buildContextKey } = require("./buildContextKey");
 
 function createDetectors({
   loadAllComments,
-  extractComments,
+  buildVCMObjects,
   vscode,
 }) {
 
@@ -20,15 +20,15 @@ function createDetectors({
       // No shared VCM → user never used clean/commented.
       // Just say "commented" if the file has any comments at all.
       if (sharedComments.length === 0) {
-        const extracted = extractComments(doc.getText(), doc.uri.path);
-        return extracted.length > 0;
+        const vcmObjects = buildVCMObjects(doc.getText(), doc.uri.path);
+        return vcmObjects.length > 0;
       }
 
       // Toggleable shared = shared comments that are NOT alwaysShow.
       const toggleableShared = sharedComments.filter((c) => !isAlwaysShow(c));
 
       // All shared are alwaysShow → clean vs commented is visually identical.
-      // Pick a stable default (clean = false).
+      // Pick a stable default (isCommented = false → clean mode).
       if (toggleableShared.length === 0) {
         return false;
       }
@@ -38,10 +38,10 @@ function createDetectors({
       const anchorKey = buildContextKey(anchorShared);
 
       const text = doc.getText();
-      const docComments = extractComments(text, doc.uri.path);
+      const vcmObjects = buildVCMObjects(text, doc.uri.path);
 
       // 1) Strong match: by anchor key
-      const foundByKey = docComments.some((c) => buildContextKey(c) === anchorKey);
+      const foundByKey = vcmObjects.some((obj) => buildContextKey(obj) === anchorKey);
       if (foundByKey) {
         return true; // commented mode
       }
@@ -72,8 +72,8 @@ function createDetectors({
       return foundByText; // true = commented, false = clean
     } catch {
       // VCM missing/unreadable -> just fall back to "does this file have comments?"
-      const extracted = extractComments(doc.getText(), doc.uri.path);
-      return extracted.length > 0;
+      const vcmObjects = buildVCMObjects(doc.getText(), doc.uri.path);
+      return vcmObjects.length > 0;
     }
   }
 
@@ -92,7 +92,7 @@ function createDetectors({
 
       // Extract current comments from document (only need to check if ONE exists)
       const text = doc.getText();
-      const docComments = extractComments(text, doc.uri.path);
+      const docComments = buildVCMObjects(text, doc.uri.path);
 
       // Only check the first private comment for efficiency (if one is visible, they all should be)
       const firstPrivate = privateComments[0];

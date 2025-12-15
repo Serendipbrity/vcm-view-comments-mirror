@@ -11,7 +11,7 @@ const vscode = require("vscode"); // vs code api module. lets us talk to and con
 const { getCommentMarkersForFile } = require("./src/commentMarkers");
 const { VCMContentProvider } = require("./src/contentProvider");
 const { hashLine } = require("./src/hash");
-const { extractComments, injectComments, stripComments } = require("./src/commentTransforms");
+const { buildVCMObjects, injectComments, stripComments } = require("./src/commentTransforms");
 const { processCommentSync } = require("./src/processCommentSync");
 const { createDetectors } = require("./src/detection");
 const { buildContextKey } = require("./src/buildContextKey");
@@ -215,7 +215,7 @@ async function activate(context) {
           // For inline comments, also verify we're on the correct line
           if (c.type === "inline" && isInlineComment) {
             // Extract current comments and match by line
-            const docComments = extractComments(doc.getText(), doc.uri.path);
+            const docComments = buildVCMObjects(doc.getText(), doc.uri.path);
             const matchingCurrent = docComments.find(curr =>
               curr.anchor === anchorHash && curr.originalLineIndex === selectedLine
             );
@@ -283,7 +283,7 @@ async function activate(context) {
 
     const { detectInitialMode, detectPrivateVisibility } = createDetectors({
     loadAllComments,
-    extractComments,
+    buildVCMObjects,
     hashLine,
     vscode,
   });
@@ -459,7 +459,7 @@ async function activate(context) {
     // This is critical for proper matching when private comments are visible in clean mode
     const isCleanMode = !isCommented;
     const allvcmComments = [...vcmComments, ...existingPrivateComments];
-    const docComments = extractComments(text, doc.uri.path, allvcmComments, isCleanMode, debugAnchorText);
+    const docComments = buildVCMObjects(text, doc.uri.path, allvcmComments, isCleanMode, debugAnchorText);
 
     // ------------------------------------------------------------------------
     // Merge Strategy - Using processCommentSync for both shared and private
@@ -772,7 +772,7 @@ async function activate(context) {
       const sharedExistsBootstrap = await vcmFileExists(vcmDir, relativePath);
       const privateExistsBootstrap = await vcmFileExists(vcmPrivateDir, relativePath);
       if (!sharedExistsBootstrap && !privateExistsBootstrap) {
-        const extractedBootstrap = extractComments(text, doc.uri.path);
+        const extractedBootstrap = buildVCMObjects(text, doc.uri.path);
         await saveCommentsToVCM(relativePath, extractedBootstrap, true);
       }
 
@@ -988,7 +988,7 @@ async function activate(context) {
 
         if (allComments.length === 0) {
           // No VCM exists - extract only the specific comment being marked
-          const allExtractedComments = extractComments(doc.getText(), doc.uri.path);
+          const allExtractedComments = buildVCMObjects(doc.getText(), doc.uri.path);
 
           // Find all comments with matching anchor
           const candidates = allExtractedComments.filter(c => c.anchor === anchorHash);
@@ -1018,7 +1018,7 @@ async function activate(context) {
           comments = allComments;
 
           // Extract current comments to get fresh prevHash/nextHash
-          const docComments = extractComments(doc.getText(), doc.uri.path);
+          const docComments = buildVCMObjects(doc.getText(), doc.uri.path);
           const currentCandidates = docComments.filter(c => c.anchor === anchorHash);
 
           if (currentCandidates.length === 0) {
@@ -1209,7 +1209,7 @@ async function activate(context) {
           const edit = new vscode.WorkspaceEdit();
 
           // For block comments, we need to find all lines in the block
-          const docComments = extractComments(doc.getText(), doc.uri.path);
+          const docComments = buildVCMObjects(doc.getText(), doc.uri.path);
           const matchingComment = docComments.find(c => c.anchor === anchorHash);
 
           if (matchingComment) {
@@ -1299,7 +1299,7 @@ async function activate(context) {
 
       try {
         // Extract current comments to get the comment at cursor with its hashes
-        const docComments = extractComments(doc.getText(), doc.uri.path);
+        const docComments = buildVCMObjects(doc.getText(), doc.uri.path);
 
         // Find the comment at the cursor position to get its hashes
         const commentAtCursor = docComments.find(c => {
@@ -1515,7 +1515,7 @@ async function activate(context) {
         }
 
         // Extract current comments to match by context
-        const docComments = extractComments(doc.getText(), doc.uri.path);
+        const docComments = buildVCMObjects(doc.getText(), doc.uri.path);
         const currentCandidates = docComments.filter(c => c.anchor === anchorHash);
 
         if (currentCandidates.length === 0) {
@@ -1677,7 +1677,7 @@ async function activate(context) {
           ));
 
           // Extract current comments to identify which ones are private
-          const docComments = extractComments(text, doc.uri.path);
+          const docComments = buildVCMObjects(text, doc.uri.path);
 
           // Build a map of private comments by type and anchor for removal
           const privateBlocksToRemove = [];
@@ -1862,7 +1862,7 @@ async function activate(context) {
       privateComments = result.privateComments;
     } catch {
       // No .vcm file exists yet - extract and save
-      sharedComments = extractComments(doc.getText(), doc.uri.path);
+      sharedComments = buildVCMObjects(doc.getText(), doc.uri.path);
       privateComments = [];
       await saveVCM(doc, true); // allowCreate = true for explicit split view action
     }
