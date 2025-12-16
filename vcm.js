@@ -1371,8 +1371,7 @@ async function activate(context) {
               provider,
               relativePath,
               getSplitViewState,
-              loadAllComments,
-              generateCommentedSplitView
+              loadAllComments
             );
           }
         }
