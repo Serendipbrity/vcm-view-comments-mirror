@@ -971,6 +971,15 @@ async function activate(context) {
         vscode.window.showInformationMessage("VCM: Marked as Always Show ✅");
         // Update context to refresh menu items
         await updateAlwaysShowContext();
+        // Manually update split view if it's open (using splitViewManager)
+        await updateSplitViewIfOpen(
+          doc,
+          provider,
+          relativePath,
+          getSplitViewState,
+          loadAllComments,
+          generateCommentedVersion
+        );
       } catch (err) {
         vscode.window.showErrorMessage("VCM: Error marking comment as Always Show: " + err.message);
       }
@@ -1147,6 +1156,15 @@ async function activate(context) {
         vscode.window.showInformationMessage("VCM: Unmarked Always Show ✅");
         // Update context to refresh menu items
         await updateAlwaysShowContext();
+        // Manually update split view if it's open (using splitViewManager)
+        await updateSplitViewIfOpen(
+          doc,
+          provider,
+          relativePath,
+          getSplitViewState,
+          loadAllComments,
+          generateCommentedVersion
+        );
       } catch (err) {
         vscode.window.showErrorMessage("VCM: Error unmarking comment: " + err.message);
       }
