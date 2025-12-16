@@ -15,6 +15,7 @@ const { buildVCMObjects, injectComments, stripComments } = require("./src/commen
 const { processCommentSync } = require("./src/processCommentSync");
 const { createDetectors } = require("./src/detection");
 const { buildContextKey } = require("./src/buildContextKey");
+const { setupSplitViewWatchers, updateSplitViewIfOpen, closeSplitView } = require("./src/splitViewManager");
 
 // Global state variables for the extension
 let vcmEditor;           // Reference to the VCM split view editor
@@ -81,7 +82,6 @@ async function activate(context) {
 
   // Load user configuration
   const config = vscode.workspace.getConfiguration("vcm");
-  const autoSplit = config.get("autoSplitView", true);  // Auto-split vs same pane
   const liveSync = config.get("liveSync", false);       // Auto-save .vcm on edit
   const debugAnchorText = config.get("debugAnchorText", true); // Store anchor line text for debugging
 
@@ -594,141 +594,36 @@ async function activate(context) {
     }
   }
 
-  // Split view live sync: update the VCM split view when source file changes
-  // This is separate from liveSync setting and always enabled when split view is open
-  let splitViewUpdateTimeout;
-  const splitViewSyncWatcher = vscode.workspace.onDidChangeTextDocument(async (e) => {
-    // Only sync if split view is open
-    if (!vcmEditor || !tempUri || !sourceDocUri) return;
-
-    // Only sync changes to the source document (not the vcm-view: document)
-    if (e.document.uri.scheme === "vcm-view") return;
-
-    // Only sync if this is the document that has the split view open
-    if (e.document.uri.toString() !== sourceDocUri.toString()) return;
-
-    const doc = e.document;
-    const relativePath = vscode.workspace.asRelativePath(doc.uri);
-
-    // Check if this is an undo/redo operation
-    const isUndoRedo = e.reason === vscode.TextDocumentChangeReason.Undo ||
-                       e.reason === vscode.TextDocumentChangeReason.Redo;
-
-    // Debounce updates to prevent multiple rapid changes
-    clearTimeout(splitViewUpdateTimeout);
-    splitViewUpdateTimeout = setTimeout(async () => {
-      try {
-        // Get updated text from the document (source of truth)
-        const text = doc.getText();
-
-        let actualMode;
-        const storedMode = isCommentedMap.get(doc.uri.fsPath);
-
-        // Only detect mode on undo/redo/paste (might have changed modes)
-        // For normal typing, use stored mode (typing in clean mode stays in clean mode)
-        if (isUndoRedo) {
-          actualMode = await detectInitialMode(doc, vcmDir);
-          if (storedMode !== actualMode) {
-            isCommentedMap.set(doc.uri.fsPath, actualMode);
-          } else {
-            actualMode = storedMode;
-          }
-
-          // Also detect private visibility on undo/redo
-          const actualPrivateVisibility = await detectPrivateVisibility(doc, relativePath);
-          const storedPrivateVisibility = privateCommentsVisible.get(doc.uri.fsPath);
-          if (storedPrivateVisibility !== actualPrivateVisibility) {
-            privateCommentsVisible.set(doc.uri.fsPath, actualPrivateVisibility);
-          }
-        } else {
-          actualMode = storedMode;
-        }
-
-        // Get current private visibility state
-        const includePrivate = privateCommentsVisible.get(doc.uri.fsPath) === true;
-
-        let showVersion;
-        if (actualMode) {
-          // Source is in commented mode, show clean in split view
-          // Load VCM comments to preserve alwaysShow metadata
-          const { allComments: vcmComments } = await loadAllComments(relativePath);
-          showVersion = stripComments(text, doc.uri.path, vcmComments, includePrivate);
-        } else {
-          // Source is in clean mode, show commented in split view
-          // Use the same logic as toggling to commented mode
-          showVersion = await generateCommentedVersion(text, doc.uri.path, relativePath, includePrivate);
-        }
-
-        // Update the split view content
-        provider.update(tempUri, showVersion);
-      } catch (err) {
-        // Ignore errors - VCM might not exist yet
-      }
-    }, 300); // Longer debounce to handle rapid undo/redo operations
-  });
-  context.subscriptions.push(splitViewSyncWatcher);
-
-  // Helper function to close split view tab and clean up
-  const closeSplitView = async () => {
-    if (tempUri) {
-      try {
-        // Find the specific VCM tab and close only that tab (not the whole pane)
-        const allTabs = vscode.window.tabGroups.all.flatMap(group => group.tabs);
-        const vcmTab = allTabs.find(tab => {
-          if (tab.input instanceof vscode.TabInputText) {
-            return tab.input.uri.toString() === tempUri.toString();
-          }
-          return false;
-        });
-
-        if (vcmTab) {
-          await vscode.window.tabGroups.close(vcmTab);
-        }
-      } catch {
-        // ignore errors if already closed
-      }
-    }
-    
-    // Clean up our own references
-    vcmEditor = null;
-    tempUri = null;
-    sourceDocUri = null;
-    if (scrollListener) {
-      scrollListener.dispose();
-      scrollListener = null;
-    }
-  };
-
-  // Clean up when split view is closed (always, not just when liveSync is enabled)
-  const closeWatcher = vscode.workspace.onDidCloseTextDocument((doc) => {
-    if (tempUri && doc.uri.toString() === tempUri.toString()) {
-      // Split view document was closed
-      vcmEditor = null;
-      tempUri = null;
-      sourceDocUri = null;
-      if (scrollListener) {
-        scrollListener.dispose();
-        scrollListener = null;
-      }
-    } else if (sourceDocUri && doc.uri.toString() === sourceDocUri.toString()) {
-      // Source document was closed - close the split view too
-      closeSplitView();
-    }
-  });
-  context.subscriptions.push(closeWatcher);
-
-  // Monitor visible editors - close split view if source is no longer visible
-  const visibleEditorsWatcher = vscode.window.onDidChangeVisibleTextEditors((editors) => {
-    // If we have a split view open, check if source is still visible
-    if (sourceDocUri && tempUri) {
-      const sourceVisible = editors.some(e => e.document.uri.toString() === sourceDocUri.toString());
-      if (!sourceVisible) {
-        // Source is no longer visible - close the split view
-        closeSplitView();
+  // Setup split view watchers (moved to splitViewManager)
+  // Helper to get/set split view state
+  const getSplitViewState = () => ({
+    vcmEditor,
+    tempUri,
+    sourceDocUri,
+    scrollListener,
+    isCommentedMap,
+    privateCommentsVisible,
+    vcmDir,
+    setSplitViewState: (state) => {
+      if (state.vcmEditor !== undefined) vcmEditor = state.vcmEditor;
+      if (state.tempUri !== undefined) tempUri = state.tempUri;
+      if (state.sourceDocUri !== undefined) sourceDocUri = state.sourceDocUri;
+      if (state.scrollListener !== undefined) {
+        if (scrollListener) scrollListener.dispose();
+        scrollListener = state.scrollListener;
       }
     }
   });
-  context.subscriptions.push(visibleEditorsWatcher);
+
+  setupSplitViewWatchers(
+    context,
+    provider,
+    getSplitViewState,
+    loadAllComments,
+    detectInitialMode,
+    detectPrivateVisibility,
+    generateCommentedVersion
+  );
 
   // ---------------------------------------------------------------------------
   // COMMAND: Toggle same file (hide/show comments)
@@ -1799,28 +1694,15 @@ async function activate(context) {
         await vscode.workspace.applyEdit(edit);
         await vscode.commands.executeCommand("workbench.action.files.save");
 
-        // Manually update split view if it's open
-        if (tempUri && vcmEditor && sourceDocUri && doc.uri.toString() === sourceDocUri.toString()) {
-          try {
-            const updatedText = doc.getText();
-            const isInCommentedMode = isCommentedMap.get(doc.uri.fsPath);
-            const includePrivate = privateCommentsVisible.get(doc.uri.fsPath) === true;
-
-            let showVersion;
-            if (isInCommentedMode) {
-              // Source is in commented mode, show clean in split view
-              const { allComments: vcmComments } = await loadAllComments(relativePath);
-              showVersion = stripComments(updatedText, doc.uri.path, vcmComments, includePrivate);
-            } else {
-              // Source is in clean mode, show commented in split view
-              showVersion = await generateCommentedVersion(updatedText, doc.uri.path, relativePath, includePrivate);
-            }
-
-            provider.update(tempUri, showVersion);
-          } catch {
-            // Ignore errors
-          }
-        }
+        // Manually update split view if it's open (using splitViewManager)
+        await updateSplitViewIfOpen(
+          doc,
+          provider,
+          relativePath,
+          getSplitViewState,
+          loadAllComments,
+          generateCommentedVersion
+        );
 
         // Re-enable sync after a delay to ensure save completes
         setTimeout(() => (vcmSyncEnabled = true), 800);
@@ -1847,7 +1729,7 @@ async function activate(context) {
 
     // Close any existing VCM split view before opening a new one (only one VCM_ allowed)
     if (tempUri) {
-      await closeSplitView();
+      await closeSplitView(getSplitViewState);
     }
 
     const relativePath = vscode.workspace.asRelativePath(doc.uri);
