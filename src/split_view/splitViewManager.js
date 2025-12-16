@@ -7,13 +7,13 @@
 // ==============================================================================
 
 const vscode = require("vscode");
-const { mergeSharedTextCleanMode } = require("./mergeTextCleanMode");
-const { loadAllVCMComments } = require("./vcm/loadAllVCMComments");
+const { mergeSharedTextCleanMode } = require("../mergeTextCleanMode");
+const { loadAllVCMComments } = require("../vcm/loadAllVCMComments");
 // ---------------------------------------------------------------------------
 // Helper: Generate commented version (for split view)
 // ---------------------------------------------------------------------------
 async function generateCommentedSplitView(text, filePath, relativePath, includePrivate, loadAllVCMComments) {
-  const { stripComments, injectComments } = require("./commentTransforms");
+  const { stripComments, injectComments } = require("../injectExtractComments");
 
   try {
     // Load ALL comments (shared + private) to handle includePrivate correctly
@@ -73,7 +73,7 @@ async function closeSplitView(getSplitViewState) {
 // Setup split view watchers
 // ---------------------------------------------------------------------------
 function setupSplitViewWatchers(context, provider, getSplitViewState, loadAllVCMComments, detectInitialMode, detectPrivateVisibility) {
-  const { stripComments } = require("./commentTransforms");
+  const { stripComments } = require("../injectExtractComments");
 
   // Split view live sync: update the VCM split view when source file changes
   let splitViewUpdateTimeout;
@@ -194,7 +194,7 @@ function setupSplitViewWatchers(context, provider, getSplitViewState, loadAllVCM
 // Update split view manually (called from toggle private comments)
 // ---------------------------------------------------------------------------
 async function updateSplitViewIfOpen(doc, provider, relativePath, getSplitViewState, loadAllVCMComments) {
-  const { stripComments } = require("./commentTransforms");
+  const { stripComments } = require("../injectExtractComments");
   const { tempUri, vcmEditor, sourceDocUri, isCommentedMap, privateCommentsVisible } = getSplitViewState();
 
   // Manually update split view if it's open
