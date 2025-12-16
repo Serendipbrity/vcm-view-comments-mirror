@@ -1,7 +1,7 @@
-const { buildContextKey } = require("./buildContextKey");
+const { buildContextKey } = require("../buildContextKey");
 
 // ============================================================================
-// processCommentSync() determines:
+// syncCommentsToVCMs() determines:
 // ============================================================================
 // what’s in the editor right now (docComments)
 // what’s in the VCM JSON (vcmComments)
@@ -14,7 +14,7 @@ const { buildContextKey } = require("./buildContextKey");
 // update private comments correctly in clean mode
 // It Returns: “here are the updated comments that should be saved back into this VCM”.
 // ============================================================================
-function processCommentSync({
+function syncCommentsToVCMs({
   isCommented, // boolean: true = commented mode, false = clean mode
   docComments, // array: comments extracted from current document
   vcmComments, // array: comments from current VCM file (will be modified in place for clean mode)
@@ -426,6 +426,6 @@ function processCommentSync({
 }
 
 module.exports = {
-  processCommentSync,
+  syncCommentsToVCMs,
   buildContextKey,
 };

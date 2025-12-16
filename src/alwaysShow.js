@@ -1,6 +1,5 @@
 const vscode = require("vscode");
 const { getCommentMarkersForFile } = require("./commentMarkers");
-const { loadAllVCMComments } = require("./loadAllVCMComments");
 
 async function updateAlwaysShowContext({ loadAllVCMComments, buildVCMObjects, hashLine }) {
     const editor = vscode.window.activeTextEditor;

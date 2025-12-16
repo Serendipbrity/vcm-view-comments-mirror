@@ -1,5 +1,4 @@
 const { buildContextKey } = require("./buildContextKey");
-const { loadAllVCMComments } = require("./loadAllVCMComments");
 
 function createDetectors({
   loadAllVCMComments,

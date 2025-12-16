@@ -8,7 +8,7 @@
 
 const vscode = require("vscode");
 const { mergeSharedTextCleanMode } = require("./mergeTextCleanMode");
-const { loadAllVCMComments } = require("./loadAllVCMComments");
+const { loadAllVCMComments } = require("./vcm/loadAllVCMComments");
 // ---------------------------------------------------------------------------
 // Helper: Generate commented version (for split view)
 // ---------------------------------------------------------------------------

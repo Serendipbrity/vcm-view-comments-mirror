@@ -11,14 +11,15 @@ const vscode = require("vscode"); // vs code api module. lets us talk to and con
 const { getCommentMarkersForFile } = require("./src/commentMarkers");
 const { VCMContentProvider } = require("./src/contentProvider");
 const { hashLine } = require("./src/hash");
-const { buildVCMObjects, injectComments, stripComments } = require("./src/commentTransforms");
-const { processCommentSync } = require("./src/processCommentSync");
+const { injectComments, stripComments } = require("./src/commentTransforms");
+const { buildVCMObjects } = require("./src/vcm/buildVCMObjects");
+const { syncCommentsToVCMs } = require("./src/vcm/syncCommentsToVCMs");
 const { createDetectors } = require("./src/detection");
 const { buildContextKey } = require("./src/buildContextKey");
 const { setupSplitViewWatchers, updateSplitViewIfOpen, closeSplitView } = require("./src/splitViewManager");
-const { loadAllVCMComments } = require("./src/loadAllVCMComments");
-const { vcmFileExists } = require("./src/vcmFileExists");
-const { crudVCMs } = require("./src/crudVCMs");
+const { loadAllVCMComments } = require("./src/vcm/loadAllVCMComments");
+const { vcmFileExists } = require("./src/vcm/vcmFileExists");
+const { crudVCMs } = require("./src/vcm/crudVCMs");
 
 // Global state variables for the extension
 let vcmEditor;           // Reference to the VCM split view editor
@@ -147,16 +148,11 @@ async function activate(context) {
   //           without overwriting anything in the .vcm.json.
   //
   // GATING POLICY (allowCreate parameter):
+  // stop auto vcm creation on save unless explicitly toggling vcm or marking comments
   // - allowCreate = false (default): Only updates existing VCM files. If no VCM
   //   exists, this function does nothing. Use for auto-save/liveSync paths.
   // - allowCreate = true: Creates VCM if missing, or updates if exists. Use for
   //   explicit VCM actions (toggles, split view, etc.).
-  //
-  // CALL SITES:
-  // - saveWatcher / changeWatcher: allowCreate = false (auto-save, don't create)
-  // - Toggle commented/clean: allowCreate = true (explicit user action)
-  // - Split view: allowCreate = true (explicit user action)
-  // - Mark/unmark commands: Use crudVCMs directly (explicit actions)
   // ============================================================================
   async function saveVCM(doc, allowCreate = false) {
     if (doc.uri.scheme !== "file") return;
@@ -218,11 +214,11 @@ async function activate(context) {
     const docComments = buildVCMObjects(text, doc.uri.path, allvcmComments, isCleanMode, debugAnchorText);
 
     // ------------------------------------------------------------------------
-    // Merge Strategy - Using processCommentSync for both shared and private
+    // Merge Strategy - Using syncCommentsToVCMs for both shared and private
     // ------------------------------------------------------------------------
 
     // Process shared comments (these may include isPrivate flags in commented mode)
-    let finalComments = processCommentSync({
+    let finalComments = syncCommentsToVCMs({
       isCommented,
       docComments,
       vcmComments,
@@ -232,7 +228,7 @@ async function activate(context) {
     });
 
     // Process private comments (updates anchors and content)
-    processCommentSync({
+    syncCommentsToVCMs({
       isCommented,
       docComments,
       vcmComments: existingPrivateComments,
@@ -360,7 +356,6 @@ async function activate(context) {
     const doc = editor.document;
     const text = doc.getText();
     const relativePath = vscode.workspace.asRelativePath(doc.uri);
-    const vcmFileUri = vscode.Uri.joinPath(vcmDir, relativePath + ".vcm.json");
 
     // Detect initial state if not already set
     if (!isCommentedMap.has(doc.uri.fsPath)) {
@@ -389,9 +384,8 @@ async function activate(context) {
       }
 
       // Ensure a .vcm file exists before stripping
-      try {
-        await vscode.workspace.fs.stat(vcmFileUri);
-      } catch {
+      const vcmExists = await vcmFileExists(vcmDir, relativePath);
+      if (!vcmExists) {
         // No .vcm yet — extract and save before removing comments
         // We're still in commented mode here, so this will extract all comments
         await saveVCM(doc, true); // allowCreate = true for explicit toggle action
