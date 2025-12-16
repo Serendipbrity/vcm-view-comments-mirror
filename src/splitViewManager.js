@@ -9,6 +9,47 @@
 const vscode = require("vscode");
 
 // ---------------------------------------------------------------------------
+// Helper: Generate commented version (for split view)
+// ---------------------------------------------------------------------------
+async function generateCommentedSplitView(text, filePath, relativePath, includePrivate, loadAllComments) {
+  const { stripComments, injectComments } = require("./commentTransforms");
+
+  try {
+    // Load ALL comments (shared + private) to handle includePrivate correctly
+    const { sharedComments, privateComments } = await loadAllComments(relativePath);
+
+    // Merge text_cleanMode into text/block (but don't modify the original) for shared comments
+    const mergedSharedComments = sharedComments.map(comment => {
+      const merged = { ...comment };
+
+      if (comment.text_cleanMode) {
+        if (comment.type === "inline") {
+          // For inline: text_cleanMode is a string, prepend to text
+          merged.text = (comment.text_cleanMode || "") + (comment.text || "");
+        } else if (comment.type === "block") {
+          // For block: text_cleanMode is a block array, prepend to block
+          merged.block = [...(comment.text_cleanMode || []), ...(comment.block || [])];
+        }
+        merged.text_cleanMode = null;
+      }
+
+      return merged;
+    });
+
+    // Combine shared and private comments (all need to be in array for proper filtering)
+    const allComments = [...mergedSharedComments, ...privateComments];
+
+    // Strip ALL comments from source (both shared and private) before injecting
+    // We want a clean slate, then inject only what's needed based on includePrivate
+    const cleanText = stripComments(text, filePath, allComments, false, true);
+    return injectComments(cleanText, allComments, includePrivate);
+  } catch {
+    // No .vcm file exists
+    return text;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Helper function to close split view tab and clean up
 // ---------------------------------------------------------------------------
 async function closeSplitView(getSplitViewState) {
@@ -45,7 +86,7 @@ async function closeSplitView(getSplitViewState) {
 // ---------------------------------------------------------------------------
 // Setup split view watchers
 // ---------------------------------------------------------------------------
-function setupSplitViewWatchers(context, provider, getSplitViewState, loadAllComments, detectInitialMode, detectPrivateVisibility, generateCommentedSplitView) {
+function setupSplitViewWatchers(context, provider, getSplitViewState, loadAllComments, detectInitialMode, detectPrivateVisibility) {
   const { stripComments } = require("./commentTransforms");
 
   // Split view live sync: update the VCM split view when source file changes
@@ -116,7 +157,7 @@ function setupSplitViewWatchers(context, provider, getSplitViewState, loadAllCom
         } else {
           // Source is in clean mode, show commented in split view
           // Use the same logic as toggling to commented mode
-          showVersion = await generateCommentedSplitView(text, doc.uri.path, relativePath, includePrivate);
+          showVersion = await generateCommentedSplitView(text, doc.uri.path, relativePath, includePrivate, loadAllComments);
         }
 
         // Update the split view content
@@ -166,7 +207,7 @@ function setupSplitViewWatchers(context, provider, getSplitViewState, loadAllCom
 // ---------------------------------------------------------------------------
 // Update split view manually (called from toggle private comments)
 // ---------------------------------------------------------------------------
-async function updateSplitViewIfOpen(doc, provider, relativePath, getSplitViewState, loadAllComments, generateCommentedSplitView) {
+async function updateSplitViewIfOpen(doc, provider, relativePath, getSplitViewState, loadAllComments) {
   const { stripComments } = require("./commentTransforms");
   const { tempUri, vcmEditor, sourceDocUri, isCommentedMap, privateCommentsVisible } = getSplitViewState();
 
@@ -184,7 +225,7 @@ async function updateSplitViewIfOpen(doc, provider, relativePath, getSplitViewSt
         showVersion = stripComments(updatedText, doc.uri.path, vcmComments, includePrivate);
       } else {
         // Source is in clean mode, show commented in split view
-        showVersion = await generateCommentedSplitView(updatedText, doc.uri.path, relativePath, includePrivate);
+        showVersion = await generateCommentedSplitView(updatedText, doc.uri.path, relativePath, includePrivate, loadAllComments);
       }
 
       provider.update(tempUri, showVersion);
@@ -201,4 +242,5 @@ module.exports = {
   setupSplitViewWatchers,
   updateSplitViewIfOpen,
   closeSplitView,
+  generateCommentedSplitView,
 };

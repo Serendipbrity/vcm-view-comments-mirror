@@ -425,44 +425,6 @@ async function activate(context) {
     context.subscriptions.push(changeWatcher);
   }
 
-  // ---------------------------------------------------------------------------
-  // Helper: Generate commented version (for toggle and split view)
-  // ---------------------------------------------------------------------------
-  async function generateCommentedSplitView(text, filePath, relativePath, includePrivate) {
-    try {
-      // Load ALL comments (shared + private) to handle includePrivate correctly
-      const { sharedComments, privateComments } = await loadAllComments(relativePath);
-
-      // Merge text_cleanMode into text/block (but don't modify the original) for shared comments
-      const mergedSharedComments = sharedComments.map(comment => {
-        const merged = { ...comment };
-
-        if (comment.text_cleanMode) {
-          if (comment.type === "inline") {
-            // For inline: text_cleanMode is a string, prepend to text
-            merged.text = (comment.text_cleanMode || "") + (comment.text || "");
-          } else if (comment.type === "block") {
-            // For block: text_cleanMode is a block array, prepend to block
-            merged.block = [...(comment.text_cleanMode || []), ...(comment.block || [])];
-          }
-          merged.text_cleanMode = null;
-        }
-
-        return merged;
-      });
-
-      // Combine shared and private comments (all need to be in array for proper filtering)
-      const allComments = [...mergedSharedComments, ...privateComments];
-
-      // Strip ALL comments from source (both shared and private) before injecting
-      // We want a clean slate, then inject only what's needed based on includePrivate
-      const cleanText = stripComments(text, filePath, allComments, false, true);
-      return injectComments(cleanText, allComments, includePrivate);
-    } catch {
-      // No .vcm file exists
-      return text;
-    }
-  }
 
   // Setup split view watchers (moved to splitViewManager)
   // Helper to get/set split view state
@@ -491,8 +453,7 @@ async function activate(context) {
     getSplitViewState,
     loadAllComments,
     detectInitialMode,
-    detectPrivateVisibility,
-    generateCommentedSplitView
+    detectPrivateVisibility
   );
 
   // ---------------------------------------------------------------------------
@@ -847,8 +808,7 @@ async function activate(context) {
           provider,
           relativePath,
           getSplitViewState,
-          loadAllComments,
-          generateCommentedSplitView
+          loadAllComments
         );
       } catch (err) {
         vscode.window.showErrorMessage("VCM: Error marking comment as Always Show: " + err.message);
@@ -1032,8 +992,7 @@ async function activate(context) {
           provider,
           relativePath,
           getSplitViewState,
-          loadAllComments,
-          generateCommentedSplitView
+          loadAllComments
         );
       } catch (err) {
         vscode.window.showErrorMessage("VCM: Error unmarking comment: " + err.message);
@@ -1597,8 +1556,7 @@ async function activate(context) {
           provider,
           relativePath,
           getSplitViewState,
-          loadAllComments,
-          generateCommentedSplitView
+          loadAllComments
         );
 
         // Re-enable sync after a delay to ensure save completes
