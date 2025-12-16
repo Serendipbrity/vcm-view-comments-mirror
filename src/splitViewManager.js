@@ -7,6 +7,7 @@
 // ==============================================================================
 
 const vscode = require("vscode");
+const { mergeSharedTextCleanMode } = require("./mergeTextCleanMode");
 
 // ---------------------------------------------------------------------------
 // Helper: Generate commented version (for split view)
@@ -19,22 +20,7 @@ async function generateCommentedSplitView(text, filePath, relativePath, includeP
     const { sharedComments, privateComments } = await loadAllComments(relativePath);
 
     // Merge text_cleanMode into text/block (but don't modify the original) for shared comments
-    const mergedSharedComments = sharedComments.map(comment => {
-      const merged = { ...comment };
-
-      if (comment.text_cleanMode) {
-        if (comment.type === "inline") {
-          // For inline: text_cleanMode is a string, prepend to text
-          merged.text = (comment.text_cleanMode || "") + (comment.text || "");
-        } else if (comment.type === "block") {
-          // For block: text_cleanMode is a block array, prepend to block
-          merged.block = [...(comment.text_cleanMode || []), ...(comment.block || [])];
-        }
-        merged.text_cleanMode = null;
-      }
-
-      return merged;
-    });
+    const mergedSharedComments = mergeSharedTextCleanMode(sharedComments);
 
     // Combine shared and private comments (all need to be in array for proper filtering)
     const allComments = [...mergedSharedComments, ...privateComments];
@@ -225,7 +211,7 @@ async function updateSplitViewIfOpen(doc, provider, relativePath, getSplitViewSt
         showVersion = stripComments(updatedText, doc.uri.path, vcmComments, includePrivate);
       } else {
         // Source is in clean mode, show commented in split view
-        showVersion = await generateCommentedSplitView(updatedText, doc.uri.path, relativePath, includePrivate, loadAllComments);
+        showVersion = await generateCommentedSplitView(updatedText, doc.uri.path, relativePath, includePrivate);
       }
 
       provider.update(tempUri, showVersion);
@@ -242,5 +228,4 @@ module.exports = {
   setupSplitViewWatchers,
   updateSplitViewIfOpen,
   closeSplitView,
-  generateCommentedSplitView,
 };
