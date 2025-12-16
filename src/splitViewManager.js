@@ -45,7 +45,7 @@ async function closeSplitView(getSplitViewState) {
 // ---------------------------------------------------------------------------
 // Setup split view watchers
 // ---------------------------------------------------------------------------
-function setupSplitViewWatchers(context, provider, getSplitViewState, loadAllComments, detectInitialMode, detectPrivateVisibility, generateCommentedVersion) {
+function setupSplitViewWatchers(context, provider, getSplitViewState, loadAllComments, detectInitialMode, detectPrivateVisibility, generateCommentedSplitView) {
   const { stripComments } = require("./commentTransforms");
 
   // Split view live sync: update the VCM split view when source file changes
@@ -116,7 +116,7 @@ function setupSplitViewWatchers(context, provider, getSplitViewState, loadAllCom
         } else {
           // Source is in clean mode, show commented in split view
           // Use the same logic as toggling to commented mode
-          showVersion = await generateCommentedVersion(text, doc.uri.path, relativePath, includePrivate);
+          showVersion = await generateCommentedSplitView(text, doc.uri.path, relativePath, includePrivate);
         }
 
         // Update the split view content
@@ -166,7 +166,7 @@ function setupSplitViewWatchers(context, provider, getSplitViewState, loadAllCom
 // ---------------------------------------------------------------------------
 // Update split view manually (called from toggle private comments)
 // ---------------------------------------------------------------------------
-async function updateSplitViewIfOpen(doc, provider, relativePath, getSplitViewState, loadAllComments, generateCommentedVersion) {
+async function updateSplitViewIfOpen(doc, provider, relativePath, getSplitViewState, loadAllComments, generateCommentedSplitView) {
   const { stripComments } = require("./commentTransforms");
   const { tempUri, vcmEditor, sourceDocUri, isCommentedMap, privateCommentsVisible } = getSplitViewState();
 
@@ -184,7 +184,7 @@ async function updateSplitViewIfOpen(doc, provider, relativePath, getSplitViewSt
         showVersion = stripComments(updatedText, doc.uri.path, vcmComments, includePrivate);
       } else {
         // Source is in clean mode, show commented in split view
-        showVersion = await generateCommentedVersion(updatedText, doc.uri.path, relativePath, includePrivate);
+        showVersion = await generateCommentedSplitView(updatedText, doc.uri.path, relativePath, includePrivate);
       }
 
       provider.update(tempUri, showVersion);

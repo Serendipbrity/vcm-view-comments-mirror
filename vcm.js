@@ -103,6 +103,7 @@ async function activate(context) {
     vscode.workspace.registerTextDocumentContentProvider("vcm-view", provider)
   );
   const { updateAlwaysShow } = require("./src/alwaysShow");
+  // TODO: might need to move this lower in the file but seems to be working fine rn
   const deps = { loadAllComments, buildVCMObjects, hashLine };
 
   // ---------------------------------------------------------------------------
@@ -427,7 +428,7 @@ async function activate(context) {
   // ---------------------------------------------------------------------------
   // Helper: Generate commented version (for toggle and split view)
   // ---------------------------------------------------------------------------
-  async function generateCommentedVersion(text, filePath, relativePath, includePrivate) {
+  async function generateCommentedSplitView(text, filePath, relativePath, includePrivate) {
     try {
       // Load ALL comments (shared + private) to handle includePrivate correctly
       const { sharedComments, privateComments } = await loadAllComments(relativePath);
@@ -491,7 +492,7 @@ async function activate(context) {
     loadAllComments,
     detectInitialMode,
     detectPrivateVisibility,
-    generateCommentedVersion
+    generateCommentedSplitView
   );
 
   // ---------------------------------------------------------------------------
@@ -847,7 +848,7 @@ async function activate(context) {
           relativePath,
           getSplitViewState,
           loadAllComments,
-          generateCommentedVersion
+          generateCommentedSplitView
         );
       } catch (err) {
         vscode.window.showErrorMessage("VCM: Error marking comment as Always Show: " + err.message);
@@ -1032,7 +1033,7 @@ async function activate(context) {
           relativePath,
           getSplitViewState,
           loadAllComments,
-          generateCommentedVersion
+          generateCommentedSplitView
         );
       } catch (err) {
         vscode.window.showErrorMessage("VCM: Error unmarking comment: " + err.message);
@@ -1412,7 +1413,7 @@ async function activate(context) {
               relativePath,
               getSplitViewState,
               loadAllComments,
-              generateCommentedVersion
+              generateCommentedSplitView
             );
           }
         }
@@ -1597,7 +1598,7 @@ async function activate(context) {
           relativePath,
           getSplitViewState,
           loadAllComments,
-          generateCommentedVersion
+          generateCommentedSplitView
         );
 
         // Re-enable sync after a delay to ensure save completes
