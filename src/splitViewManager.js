@@ -8,16 +8,16 @@
 
 const vscode = require("vscode");
 const { mergeSharedTextCleanMode } = require("./mergeTextCleanMode");
-
+const { loadAllVCMComments } = require("./loadAllVCMComments");
 // ---------------------------------------------------------------------------
 // Helper: Generate commented version (for split view)
 // ---------------------------------------------------------------------------
-async function generateCommentedSplitView(text, filePath, relativePath, includePrivate, loadAllComments) {
+async function generateCommentedSplitView(text, filePath, relativePath, includePrivate, loadAllVCMComments) {
   const { stripComments, injectComments } = require("./commentTransforms");
 
   try {
     // Load ALL comments (shared + private) to handle includePrivate correctly
-    const { sharedComments, privateComments } = await loadAllComments(relativePath);
+    const { sharedComments, privateComments } = await loadAllVCMComments(relativePath);
 
     // Merge text_cleanMode into text/block (but don't modify the original) for shared comments
     const mergedSharedComments = mergeSharedTextCleanMode(sharedComments);
@@ -72,7 +72,7 @@ async function closeSplitView(getSplitViewState) {
 // ---------------------------------------------------------------------------
 // Setup split view watchers
 // ---------------------------------------------------------------------------
-function setupSplitViewWatchers(context, provider, getSplitViewState, loadAllComments, detectInitialMode, detectPrivateVisibility) {
+function setupSplitViewWatchers(context, provider, getSplitViewState, loadAllVCMComments, detectInitialMode, detectPrivateVisibility) {
   const { stripComments } = require("./commentTransforms");
 
   // Split view live sync: update the VCM split view when source file changes
@@ -138,12 +138,12 @@ function setupSplitViewWatchers(context, provider, getSplitViewState, loadAllCom
         if (actualMode) {
           // Source is in commented mode, show clean in split view
           // Load VCM comments to preserve alwaysShow metadata
-          const { allComments: vcmComments } = await loadAllComments(relativePath);
+          const { allComments: vcmComments } = await loadAllVCMComments(relativePath);
           showVersion = stripComments(text, doc.uri.path, vcmComments, includePrivate);
         } else {
           // Source is in clean mode, show commented in split view
           // Use the same logic as toggling to commented mode
-          showVersion = await generateCommentedSplitView(text, doc.uri.path, relativePath, includePrivate, loadAllComments);
+          showVersion = await generateCommentedSplitView(text, doc.uri.path, relativePath, includePrivate, loadAllVCMComments);
         }
 
         // Update the split view content
@@ -193,7 +193,7 @@ function setupSplitViewWatchers(context, provider, getSplitViewState, loadAllCom
 // ---------------------------------------------------------------------------
 // Update split view manually (called from toggle private comments)
 // ---------------------------------------------------------------------------
-async function updateSplitViewIfOpen(doc, provider, relativePath, getSplitViewState, loadAllComments) {
+async function updateSplitViewIfOpen(doc, provider, relativePath, getSplitViewState, loadAllVCMComments) {
   const { stripComments } = require("./commentTransforms");
   const { tempUri, vcmEditor, sourceDocUri, isCommentedMap, privateCommentsVisible } = getSplitViewState();
 
@@ -207,7 +207,7 @@ async function updateSplitViewIfOpen(doc, provider, relativePath, getSplitViewSt
       let showVersion;
       if (isInCommentedMode) {
         // Source is in commented mode, show clean in split view
-        const { allComments: vcmComments } = await loadAllComments(relativePath);
+        const { allComments: vcmComments } = await loadAllVCMComments(relativePath);
         showVersion = stripComments(updatedText, doc.uri.path, vcmComments, includePrivate);
       } else {
         // Source is in clean mode, show commented in split view

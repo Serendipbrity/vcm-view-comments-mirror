@@ -1,7 +1,8 @@
 const vscode = require("vscode");
 const { getCommentMarkersForFile } = require("./commentMarkers");
+const { loadAllVCMComments } = require("./loadAllVCMComments");
 
-async function updateAlwaysShowContext({ loadAllComments, buildVCMObjects, hashLine }) {
+async function updateAlwaysShowContext({ loadAllVCMComments, buildVCMObjects, hashLine }) {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
       await vscode.commands.executeCommand('setContext', 'vcm.commentIsAlwaysShow', false);
@@ -45,7 +46,7 @@ async function updateAlwaysShowContext({ loadAllComments, buildVCMObjects, hashL
     const relativePath = vscode.workspace.asRelativePath(doc.uri);
 
     try {
-      const { allComments: comments } = await loadAllComments(relativePath);
+      const { allComments: comments } = await loadAllVCMComments(relativePath);
 
       // Find the anchor hash for this comment
       const lines = doc.getText().split("\n");
