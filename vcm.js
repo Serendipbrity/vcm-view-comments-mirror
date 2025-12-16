@@ -18,7 +18,7 @@ const { buildContextKey } = require("./src/buildContextKey");
 const { setupSplitViewWatchers, updateSplitViewIfOpen, closeSplitView } = require("./src/splitViewManager");
 const { loadAllVCMComments } = require("./src/loadAllVCMComments");
 const { vcmFileExists } = require("./src/vcmFileExists");
-const { createUpdateOrDeleteVCMs } = require("./src/createUpdateOrDeleteVCMs");
+const { crudVCMs } = require("./src/crudVCMs");
 
 // Global state variables for the extension
 let vcmEditor;           // Reference to the VCM split view editor
@@ -156,7 +156,7 @@ async function activate(context) {
   // - saveWatcher / changeWatcher: allowCreate = false (auto-save, don't create)
   // - Toggle commented/clean: allowCreate = true (explicit user action)
   // - Split view: allowCreate = true (explicit user action)
-  // - Mark/unmark commands: Use createUpdateOrDeleteVCMs directly (explicit actions)
+  // - Mark/unmark commands: Use crudVCMs directly (explicit actions)
   // ============================================================================
   async function saveVCM(doc, allowCreate = false) {
     if (doc.uri.scheme !== "file") return;
@@ -282,7 +282,7 @@ async function activate(context) {
     }).map(pc => ({ ...pc, isPrivate: true })); // Ensure isPrivate flag is set
 
     const finalCommentsWithPrivate = [...finalComments, ...missingPrivateComments];
-    await createUpdateOrDeleteVCMs(relativePath, finalCommentsWithPrivate, vcmDir);
+    await crudVCMs(relativePath, finalCommentsWithPrivate, vcmDir);
   }
 
   // ---------------------------------------------------------------------------
@@ -385,7 +385,7 @@ async function activate(context) {
       const privateExistsBootstrap = await vcmFileExists(vcmPrivateDir, relativePath);
       if (!sharedExistsBootstrap && !privateExistsBootstrap) {
         const extractedBootstrap = buildVCMObjects(text, doc.uri.path);
-        await createUpdateOrDeleteVCMs(relativePath, extractedBootstrap, vcmDir);
+        await crudVCMs(relativePath, extractedBootstrap, vcmDir);
       }
 
       // Ensure a .vcm file exists before stripping
@@ -433,13 +433,13 @@ async function activate(context) {
         const includePrivate = privateCommentsVisible.get(doc.uri.fsPath) === true;
         newText = injectComments(cleanText, allMergedComments, includePrivate);
 
-        // Save the merged shared comments back to VCM (using createUpdateOrDeleteVCMs for consistency)
+        // Save the merged shared comments back to VCM (using crudVCMs for consistency)
         // Combine shared and private, preserving private comments unchanged
         const commentsToSave = [
           ...mergedSharedComments,
           ...existingPrivateComments.map(c => ({ ...c, isPrivate: true }))
         ];
-        await createUpdateOrDeleteVCMs(relativePath, commentsToSave, vcmDir);
+        await crudVCMs(relativePath, commentsToSave, vcmDir);
 
         // Mark this file as now in commented mode
         isCommentedMap.set(doc.uri.fsPath, true);
@@ -669,7 +669,7 @@ async function activate(context) {
         }
 
         // Save updated comments
-        await createUpdateOrDeleteVCMs(relativePath, comments, vcmDir);
+        await crudVCMs(relativePath, comments, vcmDir);
 
         vscode.window.showInformationMessage("VCM: Marked as Always Show ✅");
         // Update context to refresh menu items
@@ -806,7 +806,7 @@ async function activate(context) {
         }
 
         // Save updated comments using helper function
-        await createUpdateOrDeleteVCMs(relativePath, comments, vcmDir);
+        await crudVCMs(relativePath, comments, vcmDir);
 
         // Check if we're in clean mode - if so, remove the comment from the document
         const isInCleanMode = isCommentedMap.get(doc.uri.fsPath) === false;
@@ -974,7 +974,7 @@ async function activate(context) {
         }
 
         // Save updated comments (will split into shared/private automatically)
-        await createUpdateOrDeleteVCMs(relativePath, comments, vcmDir);
+        await crudVCMs(relativePath, comments, vcmDir);
 
         // Check if private comments are currently visible
         const privateVisible = privateCommentsVisible.get(doc.uri.fsPath) === true;
@@ -1184,7 +1184,7 @@ async function activate(context) {
         delete targetVcmComment.isPrivate;
 
         // Save updated comments (will split into shared/private automatically)
-        await createUpdateOrDeleteVCMs(relativePath, comments, vcmDir);
+        await crudVCMs(relativePath, comments, vcmDir);
 
         // Check if we need to remove the comment from the document
         const isInCommentedMode = isCommentedMap.get(doc.uri.fsPath);
