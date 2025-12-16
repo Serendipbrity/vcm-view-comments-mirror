@@ -9,14 +9,14 @@
 
 const vscode = require("vscode"); // vs code api module. lets us talk to and control VSCode itself
 const { getCommentMarkersForFile } = require("./src/commentMarkers");
-const { VCMContentProvider } = require("./src/contentProvider");
+const { VCMContentProvider } = require("./src/split_view/contentProvider");
 const { hashLine } = require("./src/hash");
-const { injectComments, stripComments } = require("./src/commentTransforms");
+const { injectComments, stripComments } = require("./src/injectExtractComments");
 const { buildVCMObjects } = require("./src/vcm/buildVCMObjects");
 const { syncCommentsToVCMs } = require("./src/vcm/syncCommentsToVCMs");
-const { createDetectors } = require("./src/detection");
+const { createDetectors } = require("./src/detectModes");
 const { buildContextKey } = require("./src/buildContextKey");
-const { setupSplitViewWatchers, updateSplitViewIfOpen, closeSplitView } = require("./src/splitViewManager");
+const { setupSplitViewWatchers, updateSplitViewIfOpen, closeSplitView } = require("./src/split_view/splitViewManager");
 const { loadAllVCMComments } = require("./src/vcm/loadAllVCMComments");
 const { vcmFileExists } = require("./src/vcm/vcmFileExists");
 const { crudVCMs } = require("./src/vcm/crudVCMs");
