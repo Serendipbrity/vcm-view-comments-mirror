@@ -492,146 +492,41 @@ async function activate(context) {
 
       const doc = editor.document;
       const selectedLine = editor.selection.active.line;
-      const line = doc.lineAt(selectedLine);
-      const text = line.text;
-      const trimmed = text.trim();
-
-      // Check if line has a comment (block or inline)
-      const isBlockComment = trimmed.match(/^(\s*)(#|\/\/|--|%|;)/);
-      const commentMarkers = getCommentMarkersForFile(doc.uri.path);
-      let isInlineComment = false;
-
-      // Check if line contains an inline comment
-      if (!isBlockComment) {
-        for (const marker of commentMarkers) {
-          const markerIndex = text.indexOf(marker);
-          if (markerIndex > 0) {
-            // Comment marker appears after position 0, so it's inline
-            isInlineComment = true;
-            break;
-          }
-        }
-      }
-
-      if (!isBlockComment && !isInlineComment) {
-        vscode.window.showWarningMessage("VCM: You can only mark comment lines as 'Always Show'.");
-        return;
-      }
-
       const relativePath = vscode.workspace.asRelativePath(doc.uri);
 
       try {
-        // Find the anchor hash for this comment
-        const lines = doc.getText().split("\n");
-        let anchorHash;
+        // Extract current comments and find the one at cursor position
+        const docComments = buildVCMObjects(doc.getText(), doc.uri.path);
 
-        if (isInlineComment) {
-          // For inline comments, the anchor is the code portion before the comment
-          // Find where the comment starts and hash only the code part
-          let commentStartIndex = -1;
-          for (const marker of commentMarkers) {
-            const markerRegex = new RegExp(`(\\s+)(${marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`);
-            const match = text.match(markerRegex);
-            if (match) {
-              commentStartIndex = match.index;
-              break;
-            }
+        // Find the comment at the selected line
+        const commentAtCursor = docComments.find(c => {
+          if (c.type === "inline") {
+            return c.originalLineIndex === selectedLine;
+          } else if (c.type === "block" && c.block) {
+            return c.block.some(b => b.originalLineIndex === selectedLine);
           }
-          if (commentStartIndex > 0) {
-            const anchorBase = text.substring(0, commentStartIndex).trimEnd();
-            anchorHash = hashLine(anchorBase, 0);
-          } else {
-            vscode.window.showErrorMessage("VCM: Could not find comment marker.");
-            return;
-          }
-        } else {
-          // For block comments, find the next non-comment line
-          let anchorLineIndex = -1;
-          for (let i = selectedLine + 1; i < lines.length; i++) {
-            const trimmed = lines[i].trim();
-            if (trimmed && !trimmed.match(/^(\s*)(#|\/\/|--|%|;)/)) {
-              anchorLineIndex = i;
-              break;
-            }
-          }
+          return false;
+        });
 
-          // If no code line below, fallback to the previous code line
-          if (anchorLineIndex === -1) {
-            for (let i = selectedLine - 1; i >= 0; i--) {
-              const trimmed = lines[i].trim();
-              if (trimmed && !trimmed.match(/^(\s*)(#|\/\/|--|%|;)/)) {
-                anchorLineIndex = i;
-                break;
-              }
-            }
-          }
-
-          if (anchorLineIndex === -1) {
-            vscode.window.showErrorMessage("VCM: Could not determine anchor line for this comment.");
-            return;
-          }
-
-          anchorHash = hashLine(lines[anchorLineIndex], 0);
+        if (!commentAtCursor) {
+          vscode.window.showWarningMessage("VCM: You can only mark comment lines as 'Always Show'.");
+          return;
         }
 
         // Load or create VCM comments
         let comments = [];
         const { allComments, sharedComments } = await loadAllVCMComments(relativePath, vcmDir);
 
-        // If no shared VCM exists - extract ALL comments and mark the target as alwaysShow
+        // If no shared VCM exists - save all extracted comments
         if (!sharedComments || sharedComments.length === 0) {
-          const allExtractedComments = buildVCMObjects(doc.getText(), doc.uri.path);
-
-          // Find the comment at the selected line
-          const targetComment = allExtractedComments.find(c => {
-            if (isInlineComment) {
-              return c.type === "inline" && c.anchor === anchorHash && c.originalLineIndex === selectedLine;
-            } else {
-              // For block comments, check if selected line is within the block
-              if (c.type === "block" && c.block) {
-                return c.block.some(b => b.originalLineIndex === selectedLine);
-              }
-              return false;
-            }
-          });
-
-          if (!targetComment) {
-            vscode.window.showWarningMessage("VCM: Could not find a matching comment entry.");
-            return;
-          }
-
-          // Only add the specific comment being marked as always show
-          targetComment.alwaysShow = true;
-
-          // Save the entire extracted set so shared VCM has all comments
-          comments = allExtractedComments;
+          commentAtCursor.alwaysShow = true;
+          comments = docComments;
         } else {
           // VCM exists - mark the comment in existing list using context matching
           comments = allComments;
 
-          // Extract current comments to get fresh context
-          const docComments = buildVCMObjects(doc.getText(), doc.uri.path);
-
-          // Find the comment at the selected line
-          const currentComment = docComments.find(c => {
-            if (isInlineComment) {
-              return c.type === "inline" && c.anchor === anchorHash && c.originalLineIndex === selectedLine;
-            } else {
-              // For block comments, check if selected line is within the block
-              if (c.type === "block" && c.block) {
-                return c.block.some(b => b.originalLineIndex === selectedLine);
-              }
-              return false;
-            }
-          });
-
-          if (!currentComment) {
-            vscode.window.showWarningMessage("VCM: Could not find a matching comment entry in current file.");
-            return;
-          }
-
           // Build context key for current comment
-          const currentKey = buildContextKey(currentComment);
+          const currentKey = buildContextKey(commentAtCursor);
 
           // Find matching VCM comment using context key
           const targetVcmComment = comments.find(c => buildContextKey(c) === currentKey);
@@ -640,8 +535,8 @@ async function activate(context) {
             targetVcmComment.alwaysShow = true;
           } else {
             // Comment not found in existing VCM - add it as a new entry with alwaysShow
-            currentComment.alwaysShow = true;
-            comments.push(currentComment);
+            commentAtCursor.alwaysShow = true;
+            comments.push(commentAtCursor);
           }
         }
 
@@ -677,35 +572,27 @@ async function activate(context) {
 
       const doc = editor.document;
       const selectedLine = editor.selection.active.line;
-      const line = doc.lineAt(selectedLine);
-      const text = line.text;
-      const trimmed = text.trim();
-
-      // Check if line has a comment (block or inline)
-      const isBlockComment = trimmed.match(/^(\s*)(#|\/\/|--|%|;)/);
-      const commentMarkers = getCommentMarkersForFile(doc.uri.path);
-      let isInlineComment = false;
-
-      // Check if line contains an inline comment
-      if (!isBlockComment) {
-        for (const marker of commentMarkers) {
-          const markerIndex = text.indexOf(marker);
-          if (markerIndex > 0) {
-            // Comment marker appears after position 0, so it's inline
-            isInlineComment = true;
-            break;
-          }
-        }
-      }
-
-      if (!isBlockComment && !isInlineComment) {
-        vscode.window.showWarningMessage("VCM: You can only unmark comment lines.");
-        return;
-      }
-
       const relativePath = vscode.workspace.asRelativePath(doc.uri);
 
       try {
+        // Extract current comments and find the one at cursor position
+        const docComments = buildVCMObjects(doc.getText(), doc.uri.path);
+
+        // Find the comment at the selected line
+        const commentAtCursor = docComments.find(c => {
+          if (c.type === "inline") {
+            return c.originalLineIndex === selectedLine;
+          } else if (c.type === "block" && c.block) {
+            return c.block.some(b => b.originalLineIndex === selectedLine);
+          }
+          return false;
+        });
+
+        if (!commentAtCursor) {
+          vscode.window.showWarningMessage("VCM: You can only unmark comment lines.");
+          return;
+        }
+
         // Load all comments using helper function
         const { allComments } = await loadAllVCMComments(relativePath, vcmDir);
 
@@ -715,79 +602,6 @@ async function activate(context) {
         }
 
         const comments = allComments;
-
-        // Find the anchor hash for this comment
-        const lines = doc.getText().split("\n");
-        let anchorHash;
-
-        if (isInlineComment) {
-          // For inline comments, the anchor is the code portion before the comment
-          let commentStartIndex = -1;
-          for (const marker of commentMarkers) {
-            const markerRegex = new RegExp(`(\\s+)(${marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`);
-            const match = text.match(markerRegex);
-            if (match) {
-              commentStartIndex = match.index;
-              break;
-            }
-          }
-          if (commentStartIndex > 0) {
-            const anchorBase = text.substring(0, commentStartIndex).trimEnd();
-            anchorHash = hashLine(anchorBase, 0);
-          } else {
-            vscode.window.showErrorMessage("VCM: Could not find comment marker.");
-            return;
-          }
-        } else {
-          // For block comments, find the next non-comment line
-          let anchorLineIndex = -1;
-          for (let i = selectedLine + 1; i < lines.length; i++) {
-            const trimmed = lines[i].trim();
-            if (trimmed && !trimmed.match(/^(\s*)(#|\/\/|--|%|;)/)) {
-              anchorLineIndex = i;
-              break;
-            }
-          }
-
-          // If no code line below, fallback to the previous code line
-          if (anchorLineIndex === -1) {
-            for (let i = selectedLine - 1; i >= 0; i--) {
-              const trimmed = lines[i].trim();
-              if (trimmed && !trimmed.match(/^(\s*)(#|\/\/|--|%|;)/)) {
-                anchorLineIndex = i;
-                break;
-              }
-            }
-          }
-
-          if (anchorLineIndex === -1) {
-            vscode.window.showErrorMessage("VCM: Could not determine anchor line for this comment.");
-            return;
-          }
-
-          anchorHash = hashLine(lines[anchorLineIndex], 0);
-        }
-
-        // Extract current comments to find the comment at cursor
-        const docComments = buildVCMObjects(doc.getText(), doc.uri.path);
-
-        // Find the comment at the selected line
-        const commentAtCursor = docComments.find(c => {
-          if (isInlineComment) {
-            return c.type === "inline" && c.anchor === anchorHash && c.originalLineIndex === selectedLine;
-          } else {
-            // For block comments, check if selected line is within the block
-            if (c.type === "block" && c.block) {
-              return c.block.some(b => b.originalLineIndex === selectedLine);
-            }
-            return false;
-          }
-        });
-
-        if (!commentAtCursor) {
-          vscode.window.showWarningMessage("VCM: Could not find a matching comment entry.");
-          return;
-        }
 
         // Build context key for the comment at cursor
         const currentKey = buildContextKey(commentAtCursor);
@@ -828,7 +642,7 @@ async function activate(context) {
               edit.delete(doc.uri, range);
             } else if (matchingComment.type === "inline") {
               // Remove just the inline comment part (keep the code)
-              const lineText = lines[matchingComment.originalLineIndex];
+              const lineText = doc.lineAt(matchingComment.originalLineIndex).text;
               const commentMarkers = getCommentMarkersForFile(doc.uri.path);
 
               // Find where the comment starts
@@ -884,55 +698,24 @@ async function activate(context) {
 
       const doc = editor.document;
       const selectedLine = editor.selection.active.line;
-      const line = doc.lineAt(selectedLine);
-      const text = line.text;
-      const trimmed = text.trim();
-
-      // Check if line has a comment (block or inline)
-      const isBlockComment = trimmed.match(/^(\s*)(#|\/\/|--|%|;)/);
-      const commentMarkers = getCommentMarkersForFile(doc.uri.path);
-      let isInlineComment = false;
-
-      // Check if line contains an inline comment
-      if (!isBlockComment) {
-        for (const marker of commentMarkers) {
-          const markerIndex = text.indexOf(marker);
-          if (markerIndex > 0) {
-            // Comment marker appears after position 0, so it's inline
-            isInlineComment = true;
-            break;
-          }
-        }
-      }
-
-      if (!isBlockComment && !isInlineComment) {
-        vscode.window.showWarningMessage("VCM: You can only mark comment lines as private.");
-        return;
-      }
-
       const relativePath = vscode.workspace.asRelativePath(doc.uri);
 
       try {
-        // Extract current comments to get the comment at cursor with its hashes
+        // Extract current comments and find the one at cursor position
         const docComments = buildVCMObjects(doc.getText(), doc.uri.path);
 
-        // Find the comment at the cursor position to get its hashes
+        // Find the comment at the selected line
         const commentAtCursor = docComments.find(c => {
-          if (isInlineComment) {
-            return c.type === "inline" && c.originalLineIndex === selectedLine;
-          } else {
-            // For block comments, check if cursor is within the block
-            if (c.type === "block" && c.block) {
-              const firstLine = c.block[0].originalLineIndex;
-              const lastLine = c.block[c.block.length - 1].originalLineIndex;
-              return selectedLine >= firstLine && selectedLine <= lastLine;
-            }
-            return false;
+          if (c.type === "inline") {
+            return c.originalLineIndex === selectedLine;
+          } else if (c.type === "block" && c.block) {
+            return c.block.some(b => b.originalLineIndex === selectedLine);
           }
+          return false;
         });
 
         if (!commentAtCursor) {
-          vscode.window.showWarningMessage("VCM: Could not find a matching comment entry.");
+          vscode.window.showWarningMessage("VCM: You can only mark comment lines as private.");
           return;
         }
 
@@ -1045,110 +828,29 @@ async function activate(context) {
 
       const doc = editor.document;
       const selectedLine = editor.selection.active.line;
-      const line = doc.lineAt(selectedLine);
-      const text = line.text;
-      const trimmed = text.trim();
-
-      // Check if line has a comment (block or inline)
-      const isBlockComment = trimmed.match(/^(\s*)(#|\/\/|--|%|;)/);
-      const commentMarkers = getCommentMarkersForFile(doc.uri.path);
-      let isInlineComment = false;
-
-      // Check if line contains an inline comment
-      if (!isBlockComment) {
-        for (const marker of commentMarkers) {
-          const markerIndex = text.indexOf(marker);
-          if (markerIndex > 0) {
-            // Comment marker appears after position 0, so it's inline
-            isInlineComment = true;
-            break;
-          }
-        }
-      }
-
-      if (!isBlockComment && !isInlineComment) {
-        vscode.window.showWarningMessage("VCM: You can only unmark comment lines.");
-        return;
-      }
-
       const relativePath = vscode.workspace.asRelativePath(doc.uri);
 
       try {
-        // Load all comments from both shared and private
-        const { allComments: comments } = await loadAllVCMComments(relativePath, vcmDir);
-
-        // Find the anchor hash for this comment
-        const lines = doc.getText().split("\n");
-        let anchorHash;
-
-        if (isInlineComment) {
-          // For inline comments, the anchor is the code portion before the comment
-          let commentStartIndex = -1;
-          for (const marker of commentMarkers) {
-            const markerRegex = new RegExp(`(\\s+)(${marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`);
-            const match = text.match(markerRegex);
-            if (match) {
-              commentStartIndex = match.index;
-              break;
-            }
-          }
-          if (commentStartIndex > 0) {
-            const anchorBase = text.substring(0, commentStartIndex).trimEnd();
-            anchorHash = hashLine(anchorBase, 0);
-          } else {
-            vscode.window.showErrorMessage("VCM: Could not find comment marker.");
-            return;
-          }
-        } else {
-          // For block comments, find the next non-comment line
-          let anchorLineIndex = -1;
-          for (let i = selectedLine + 1; i < lines.length; i++) {
-            const trimmed = lines[i].trim();
-            if (trimmed && !trimmed.match(/^(\s*)(#|\/\/|--|%|;)/)) {
-              anchorLineIndex = i;
-              break;
-            }
-          }
-
-          // If no code line below, fallback to the previous code line
-          if (anchorLineIndex === -1) {
-            for (let i = selectedLine - 1; i >= 0; i--) {
-              const trimmed = lines[i].trim();
-              if (trimmed && !trimmed.match(/^(\s*)(#|\/\/|--|%|;)/)) {
-                anchorLineIndex = i;
-                break;
-              }
-            }
-          }
-
-          if (anchorLineIndex === -1) {
-            vscode.window.showErrorMessage("VCM: Could not determine anchor line for this comment.");
-            return;
-          }
-
-          anchorHash = hashLine(lines[anchorLineIndex], 0);
-        }
-
-        // Extract current comments to match by context
+        // Extract current comments and find the one at cursor position
         const docComments = buildVCMObjects(doc.getText(), doc.uri.path);
 
         // Find the comment at the selected line
         const currentComment = docComments.find(c => {
-          if (isInlineComment) {
-            return c.type === "inline" && c.anchor === anchorHash && c.originalLineIndex === selectedLine;
-          } else {
-            // For block comments, check if selected line is within the block
-            if (c.type === "block" && c.block) {
-              return c.block.some(b => b.originalLineIndex === selectedLine);
-            }
-            return false;
+          if (c.type === "inline") {
+            return c.originalLineIndex === selectedLine;
+          } else if (c.type === "block" && c.block) {
+            return c.block.some(b => b.originalLineIndex === selectedLine);
           }
+          return false;
         });
 
         if (!currentComment) {
-          vscode.window.showWarningMessage("VCM: Could not find a matching comment entry in current file.");
+          vscode.window.showWarningMessage("VCM: You can only unmark comment lines.");
           return;
         }
+
+        // Load all comments from both shared and private
+        const { allComments: comments } = await loadAllVCMComments(relativePath, vcmDir);
 
         // Build context key for current comment
         const currentKey = buildContextKey(currentComment);
@@ -1196,7 +898,7 @@ async function activate(context) {
               edit.delete(doc.uri, range);
             } else if (matchingComment.type === "inline") {
               // Remove just the inline comment part (keep the code)
-              const lineText = lines[matchingComment.originalLineIndex];
+              const lineText = doc.lineAt(matchingComment.originalLineIndex).text;
 
               // Find where the comment starts
               let commentStartIndex = -1;
