@@ -990,15 +990,12 @@ async function activate(context) {
 
           // Build a map of private comments by type and anchor for removal
           const privateBlocksToRemove = [];
-          const privateInlinesToRemove = [];
 
           for (const current of docComments) {
             const currentKey = buildContextKey(current);
             if (privateKeys.has(currentKey)) {
               if (current.type === "block") {
                 privateBlocksToRemove.push(current);
-              } else if (current.type === "inline") {
-                privateInlinesToRemove.push(current);
               }
             }
           }
@@ -1018,55 +1015,65 @@ async function activate(context) {
 
           // Process lines: filter out block comments and strip inline comments
           const resultLines = [];
+          const commentMarkers = getCommentMarkersForFile(doc.uri.path);
           for (let i = 0; i < lines.length; i++) {
             // Skip lines that are part of private block comments
             if (linesToRemove.has(i)) continue;
 
             let line = lines[i];
 
-            // Check if this line has a private inline comment to remove
-            // Match by context (prevHash + nextHash), not by commentedLineIndex which can shift
-            const inlineToRemove = privateInlinesToRemove.find(c => {
-              // Find the actual line this comment should be on using its anchor
-              const codeOnly = line.split(/\s+\/\/|\s+#/).slice(0, 1)[0].trimEnd();
-              const lineHash = hashLine(codeOnly, 0);
-              
-              if (lineHash !== c.anchor) return false;
-              
-              // Verify context matches
+            // Find the start of an inline comment using real markers
+            let commentStartIdx = -1;
+            for (const marker of commentMarkers) {
+              const idx = line.indexOf(marker);
+              if (idx > 0 && line[idx - 1].match(/\s/)) {
+                commentStartIdx = idx - 1; // include the whitespace before marker
+                break;
+              }
+            }
+
+            if (commentStartIdx >= 0) {
+              // Code-only portion (this must match how parseDocComs builds anchorBase)
+              const anchorBase = line.substring(0, commentStartIdx).trimEnd();
+
+              // Find prev/next CODE lines (skip blank + comment-only lines)
+              const isCommentOnlyLine = (l) => {
+                const t = l.trim();
+                if (!t) return false;
+                return commentMarkers.some(m => t.startsWith(m));
+              };
+
               let prevIdx = -1;
               for (let j = i - 1; j >= 0; j--) {
-                if (lines[j].trim()) {
-                  prevIdx = j;
-                  break;
-                }
+                const t = lines[j].trim();
+                if (!t) continue;
+                if (isCommentOnlyLine(lines[j])) continue;
+                prevIdx = j;
+                break;
               }
+
               let nextIdx = -1;
               for (let j = i + 1; j < lines.length; j++) {
-                if (lines[j].trim()) {
-                  nextIdx = j;
-                  break;
-                }
+                const t = lines[j].trim();
+                if (!t) continue;
+                if (isCommentOnlyLine(lines[j])) continue;
+                nextIdx = j;
+                break;
               }
-              
-              const actualPrevHash = prevIdx >= 0 ? hashLine(lines[prevIdx], 0) : null;
-              const actualNextHash = nextIdx >= 0 ? hashLine(lines[nextIdx], 0) : null;
-              
-              return actualPrevHash === c.prevHash && actualNextHash === c.nextHash;
-            });
-            
-            if (inlineToRemove) {
-              // Remove the inline comment using the same logic as stripComments
-              const commentMarkers = getCommentMarkersForFile(doc.uri.path);
-              let commentStartIdx = -1;
-              for (const marker of commentMarkers) {
-                const idx = line.indexOf(marker);
-                if (idx > 0 && line[idx - 1].match(/\s/)) {
-                  commentStartIdx = idx - 1;
-                  break;
-                }
-              }
-              if (commentStartIdx >= 0) {
+
+              // IMPORTANT: prev/next hashes should be based on the full code line as stored in file.
+              // If you want these hashes to be code-only too, change parseDocComs to match.
+              const currentObj = {
+                type: "inline",
+                anchor: hashLine(anchorBase, 0),
+                prevHash: prevIdx >= 0 ? hashLine(lines[prevIdx], 0) : null,
+                nextHash: nextIdx >= 0 ? hashLine(lines[nextIdx], 0) : null,
+              };
+
+              const currentKey = buildContextKey(currentObj);
+
+              // If this line corresponds to a private inline comment, strip it
+              if (privateKeys.has(currentKey)) {
                 line = line.substring(0, commentStartIdx).trimEnd();
               }
             }
@@ -1113,13 +1120,14 @@ async function activate(context) {
           provider,
           relativePath,
           getSplitViewState,
-          (relativePath) => readBothVCMs(relativePath, vcmDir)
+          (relativePath) => readBothVCMs(relativePath, vcmPrivateDir)
         );
 
         // Re-enable sync after a delay to ensure save completes
         setTimeout(() => (vcmSyncEnabled = true), 800);
       } catch (err) {
-        vscode.window.showErrorMessage("VCM: Error toggling private comments.");
+        vscode.window.showErrorMessage("VCM: Error toggling private comments: " + (err?.message || String(err)));
+        console.error("togglePrivateComments error:", err);
         vcmSyncEnabled = true;
       }
     }
