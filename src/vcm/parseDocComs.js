@@ -8,7 +8,7 @@ const { hashLine } = require("../hash");
 // type: "inline" or "block"
 // exact text + line indices
 // anchor, prevHash, nextHash
-function parseDocComs(text, filePath, debugAnchorText = false) {
+function parseDocComs(text, filePath) {
   const lines = text.split("\n"); // Splits file text into an array of individual lines.
   const comments = [];      // Final array of all extracted comments
   let commentBuffer = [];   // Temporary holding area for consecutive comment lines
@@ -110,11 +110,8 @@ function parseDocComs(text, filePath, debugAnchorText = false) {
         commentedLineIndex: i, // the line number it appeared on (changes per mode so not reliable alone)
         text: fullComment,  // Store ALL inline comments as one combined text
       };
-
-      // Add debug anchor text if enabled
-      if (debugAnchorText) {
-        inlineComment.anchorText = anchorBase;
-      }
+      
+      inlineComment.anchorText = anchorBase;
 
       comments.push(inlineComment);
     }
@@ -139,10 +136,7 @@ function parseDocComs(text, filePath, debugAnchorText = false) {
         block: fullBlock,
       };
 
-      // Add debug anchor text if enabled
-      if (debugAnchorText) {
         blockComment.anchorText = line;
-      }
 
       comments.push(blockComment);
       commentBuffer = []; // Clear buffer for next block
@@ -168,10 +162,7 @@ function parseDocComs(text, filePath, debugAnchorText = false) {
       block: commentBuffer,
     };
 
-    // Add debug anchor text if enabled
-    if (debugAnchorText) {
       headerComment.anchorText = lines[anchorLine] || "";
-    }
 
     // Insert this block at the beginning of the comments array
     comments.unshift(headerComment);

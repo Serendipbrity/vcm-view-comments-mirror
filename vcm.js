@@ -87,7 +87,6 @@ async function activate(context) {
   // Load user configuration
   const config = vscode.workspace.getConfiguration("vcm");
   const liveSync = config.get("liveSync", false);       // Auto-save .vcm on edit
-  const debugAnchorText = config.get("debugAnchorText", true); // Store anchor line text for debugging
 
   // Create .vcm directory in workspace root
   // This stores .vcm.json files that mirror the comment structure
@@ -211,7 +210,7 @@ async function activate(context) {
     // This is critical for proper matching when private comments are visible in clean mode
     const isCleanMode = !isCommented;
     const allvcmComments = [...vcmComments, ...existingPrivateComments];
-    const docComments = parseDocComs(text, doc.uri.path, allvcmComments, isCleanMode, debugAnchorText);
+    const docComments = parseDocComs(text, doc.uri.path);
 
     // ------------------------------------------------------------------------
     // Merge Strategy - Using mergeIntoVCMs for both shared and private
@@ -966,7 +965,7 @@ async function activate(context) {
 
       try {
         // Load private comments from private VCM file
-        const { privateComments } = await readBothVCMs(relativePath, vcmDir);
+        const { privateComments } = await readBothVCMs(relativePath, vcmPrivateDir);
 
         if (privateComments.length === 0) {
           vscode.window.showInformationMessage("VCM: No private comments found in this file.");

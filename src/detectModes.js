@@ -59,7 +59,7 @@ function createDetectors({
         return false;
       }
 
-      const foundByText = docComments.some((c) => {
+      const foundByText = vcmObjects.some((c) => {
         if (c.type === "inline") {
           return c.text && c.text.includes(anchorText);
         }

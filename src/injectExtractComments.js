@@ -338,7 +338,7 @@ function stripComments(text, filePath, vcmComments = [], keepPrivate = false, is
   // # TODO revisit this for the spacing stuff
   // Extract current comments to identify blank lines within comment blocks
   // Pass vcmComments and mode so blank line extraction works correctly
-  const docComments = parseDocComs(text, filePath, vcmComments, isCleanMode);
+  const docComments = parseDocComs(text, filePath);
 
   // Build sets for tracking lines
   const allCommentBlockLines = new Set();
