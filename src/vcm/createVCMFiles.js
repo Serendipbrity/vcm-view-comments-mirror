@@ -2,7 +2,7 @@ const vscode = require("vscode");
 const { vcmFileExists } = require("./vcmFileExists");
 
 // ============================================================================
-// crudVCMs()
+// createVCMFiles()
 // ============================================================================
 // Low-level writer that splits comments into shared and private VCM files.
 // This function ALWAYS writes when called (no gating logic).
@@ -13,7 +13,7 @@ const { vcmFileExists } = require("./vcmFileExists");
 // - Creates VCM files if they don't exist
 // - Updates VCM files if they exist
 // ============================================================================
-async function crudVCMs(relativePath, comments, vcmDir) {
+async function createVCMFiles(relativePath, comments, vcmDir) {
   const vcmPrivateDir = vscode.Uri.joinPath(vscode.Uri.joinPath(vcmDir, ".."), "private");
     const sharedComments = comments.filter(c => !c.isPrivate);
     const privateComments = comments.filter(c => c.isPrivate).map(c => {
@@ -78,5 +78,5 @@ async function crudVCMs(relativePath, comments, vcmDir) {
   }
 
   module.exports = {
-    crudVCMs,
+    createVCMFiles,
   };
