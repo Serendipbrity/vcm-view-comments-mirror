@@ -321,15 +321,17 @@ function stripComments(text, filePath, vcmComments = [], keepPrivate = false, is
     return -1; // No comment found
   };
 
-  // Build sets of comment anchor hashes that should be kept
-  const alwaysShowAnchors = new Set();
-  const privateAnchors = new Set();
+  // Build sets of comment context keys that should be kept
+  // Use buildContextKey() instead of anchor to avoid "ghost marking" siblings
+  const { buildContextKey } = require("./buildContextKey");
+  const alwaysShowKeys = new Set();
+  const privateKeys = new Set();
   for (const comment of vcmComments) {
     if (comment.alwaysShow) {
-      alwaysShowAnchors.add(comment.anchor);
+      alwaysShowKeys.add(buildContextKey(comment));
     }
     if (comment.isPrivate && keepPrivate) {
-      privateAnchors.add(comment.anchor);
+      privateKeys.add(buildContextKey(comment));
     }
   }
 
@@ -354,25 +356,27 @@ function stripComments(text, filePath, vcmComments = [], keepPrivate = false, is
       }
 
       // If this block is alwaysShow, also add to alwaysShow set
-      if (alwaysShowAnchors.has(current.anchor)) {
+      const currentKey = buildContextKey(current);
+      if (alwaysShowKeys.has(currentKey)) {
         for (const blockLine of current.block) {
           alwaysShowLines.add(blockLine.originalLineIndex);
         }
       }
 
       // If this block is private and we're keeping private, add to private set
-      if (privateAnchors.has(current.anchor)) {
+      if (privateKeys.has(currentKey)) {
         for (const blockLine of current.block) {
           privateLines.add(blockLine.originalLineIndex);
         }
       }
     } else if (current.type === "inline") {
-      if (alwaysShowAnchors.has(current.anchor)) {
+      const currentKey = buildContextKey(current);
+      if (alwaysShowKeys.has(currentKey)) {
         // For alwaysShow inline comments, store the line index and text
         alwaysShowLines.add(current.originalLineIndex);
         alwaysShowInlineComments.set(current.originalLineIndex, current.text || "");
       }
-      if (privateAnchors.has(current.anchor)) {
+      if (privateKeys.has(currentKey)) {
         // For private inline comments (if keeping), store the line index and text
         privateLines.add(current.originalLineIndex);
         privateInlineComments.set(current.originalLineIndex, current.text || "");

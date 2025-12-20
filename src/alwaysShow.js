@@ -1,5 +1,6 @@
 const vscode = require("vscode");
 const { getCommentMarkersForFile } = require("./commentMarkers");
+const { buildContextKey } = require("./buildContextKey");
 
 async function updateAlwaysShowContext({ loadAllVCMComments, buildVCMObjects, hashLine }) {
     const editor = vscode.window.activeTextEditor;
@@ -102,24 +103,33 @@ async function updateAlwaysShowContext({ loadAllVCMComments, buildVCMObjects, ha
         anchorHash = hashLine(lines[anchorLineIndex], 0);
       }
 
-      // Check if any comment with this anchor has alwaysShow or isPrivate
+      // Check if any comment with matching context has alwaysShow or isPrivate
       let isAlwaysShow = false;
       let isPrivate = false;
-      for (const c of comments) {
-        if (c.anchor === anchorHash) {
-          // For inline comments, also verify we're on the correct line
-          if (c.type === "inline" && isInlineComment) {
-            // Extract current comments and match by line
-            const docComments = buildVCMObjects(doc.getText(), doc.uri.path);
-            const matchingCurrent = docComments.find(curr =>
-              curr.anchor === anchorHash && curr.originalLineIndex === selectedLine
-            );
-            if (matchingCurrent) {
-              if (c.alwaysShow) isAlwaysShow = true;
-              if (c.isPrivate) isPrivate = true;
-            }
-          } else {
-            // For block comments, anchor match is sufficient
+
+      // Extract current comments to get context keys
+      const docComments = buildVCMObjects(doc.getText(), doc.uri.path);
+
+      // Find the comment at the current cursor position
+      const commentAtCursor = docComments.find(curr => {
+        if (isInlineComment) {
+          return curr.type === "inline" && curr.anchor === anchorHash && curr.originalLineIndex === selectedLine;
+        } else {
+          // For block comments, find the block that contains this line
+          if (curr.type === "block" && curr.block) {
+            return curr.block.some(b => b.originalLineIndex === selectedLine);
+          }
+          return false;
+        }
+      });
+
+      if (commentAtCursor) {
+        const currentKey = buildContextKey(commentAtCursor);
+
+        // Check if any VCM comment with this context key has alwaysShow or isPrivate
+        for (const c of comments) {
+          const vcmKey = buildContextKey(c);
+          if (vcmKey === currentKey) {
             if (c.alwaysShow) isAlwaysShow = true;
             if (c.isPrivate) isPrivate = true;
           }

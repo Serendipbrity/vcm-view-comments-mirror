@@ -582,23 +582,22 @@ async function activate(context) {
         if (!sharedComments || sharedComments.length === 0) {
           const allExtractedComments = buildVCMObjects(doc.getText(), doc.uri.path);
 
-          // Find all comments with matching anchor
-          const candidates = allExtractedComments.filter(c => c.anchor === anchorHash);
+          // Find the comment at the selected line
+          const targetComment = allExtractedComments.find(c => {
+            if (isInlineComment) {
+              return c.type === "inline" && c.anchor === anchorHash && c.originalLineIndex === selectedLine;
+            } else {
+              // For block comments, check if selected line is within the block
+              if (c.type === "block" && c.block) {
+                return c.block.some(b => b.originalLineIndex === selectedLine);
+              }
+              return false;
+            }
+          });
 
-          if (candidates.length === 0) {
+          if (!targetComment) {
             vscode.window.showWarningMessage("VCM: Could not find a matching comment entry.");
             return;
-          }
-
-          let targetComment;
-          if (candidates.length === 1) {
-            targetComment = candidates[0];
-          } else {
-            // Multiple comments with same anchor - use line number to disambiguate
-            targetComment = candidates.find(c => c.originalLineIndex === selectedLine);
-            if (!targetComment) {
-              targetComment = candidates[0]; // Fallback to first match
-            }
           }
 
           // Only add the specific comment being marked as always show
@@ -610,55 +609,39 @@ async function activate(context) {
           // VCM exists - mark the comment in existing list using context matching
           comments = allComments;
 
-          // Extract current comments to get fresh prevHash/nextHash
+          // Extract current comments to get fresh context
           const docComments = buildVCMObjects(doc.getText(), doc.uri.path);
-          const currentCandidates = docComments.filter(c => c.anchor === anchorHash);
 
-          if (currentCandidates.length === 0) {
+          // Find the comment at the selected line
+          const currentComment = docComments.find(c => {
+            if (isInlineComment) {
+              return c.type === "inline" && c.anchor === anchorHash && c.originalLineIndex === selectedLine;
+            } else {
+              // For block comments, check if selected line is within the block
+              if (c.type === "block" && c.block) {
+                return c.block.some(b => b.originalLineIndex === selectedLine);
+              }
+              return false;
+            }
+          });
+
+          if (!currentComment) {
             vscode.window.showWarningMessage("VCM: Could not find a matching comment entry in current file.");
             return;
           }
 
-          // Find the current comment at the selected line
-          let currentComment = currentCandidates.find(c => c.originalLineIndex === selectedLine);
-          if (!currentComment && currentCandidates.length > 0) {
-            currentComment = currentCandidates[0]; // Fallback
-          }
+          // Build context key for current comment
+          const currentKey = buildContextKey(currentComment);
 
-          // Now match this current comment to a VCM comment using context
-          const vcmCandidates = comments.filter(c => c.anchor === anchorHash);
-          let targetVcmComment;
+          // Find matching VCM comment using context key
+          const targetVcmComment = comments.find(c => buildContextKey(c) === currentKey);
 
-          if (vcmCandidates.length === 1) {
-            targetVcmComment = vcmCandidates[0];
-          } else if (vcmCandidates.length > 1) {
-            // Use context hashes to find best match
-            let bestMatch = null;
-            let bestScore = -1;
-
-            for (const vcm of vcmCandidates) {
-              let score = 0;
-              if (currentComment.prevHash && vcm.prevHash === currentComment.prevHash) {
-                score += 10;
-              }
-              if (currentComment.nextHash && vcm.nextHash === currentComment.nextHash) {
-                score += 10;
-              }
-              if (score > bestScore) {
-                bestScore = score;
-                bestMatch = vcm;
-              }
-            }
-            targetVcmComment = bestMatch || vcmCandidates[0];
+          if (targetVcmComment) {
+            targetVcmComment.alwaysShow = true;
           } else {
             // Comment not found in existing VCM - add it as a new entry with alwaysShow
             currentComment.alwaysShow = true;
             comments.push(currentComment);
-            targetVcmComment = null; // Mark that we added it, so we don't try to modify it below
-          }
-
-          if (targetVcmComment) {
-            targetVcmComment.alwaysShow = true;
           }
         }
 
@@ -785,12 +768,37 @@ async function activate(context) {
           anchorHash = hashLine(lines[anchorLineIndex], 0);
         }
 
-        // Search for comment with this anchor and remove alwaysShow
+        // Extract current comments to find the comment at cursor
+        const docComments = buildVCMObjects(doc.getText(), doc.uri.path);
+
+        // Find the comment at the selected line
+        const commentAtCursor = docComments.find(c => {
+          if (isInlineComment) {
+            return c.type === "inline" && c.anchor === anchorHash && c.originalLineIndex === selectedLine;
+          } else {
+            // For block comments, check if selected line is within the block
+            if (c.type === "block" && c.block) {
+              return c.block.some(b => b.originalLineIndex === selectedLine);
+            }
+            return false;
+          }
+        });
+
+        if (!commentAtCursor) {
+          vscode.window.showWarningMessage("VCM: Could not find a matching comment entry.");
+          return;
+        }
+
+        // Build context key for the comment at cursor
+        const currentKey = buildContextKey(commentAtCursor);
+
+        // Search for comment with matching context key and remove alwaysShow
         let found = false;
         for (const c of comments) {
-            if (c.anchor === anchorHash && c.alwaysShow) {
+          if (buildContextKey(c) === currentKey && c.alwaysShow) {
             delete c.alwaysShow;
             found = true;
+            break;
           }
         }
 
@@ -809,9 +817,7 @@ async function activate(context) {
           // Remove the comment line(s) from the document
           const edit = new vscode.WorkspaceEdit();
 
-          // For block comments, we need to find all lines in the block
-          const docComments = buildVCMObjects(doc.getText(), doc.uri.path);
-          const matchingComment = docComments.find(c => c.anchor === anchorHash);
+          const matchingComment = commentAtCursor;
 
           if (matchingComment) {
             if (matchingComment.type === "block" && matchingComment.block) {
@@ -1125,54 +1131,39 @@ async function activate(context) {
 
         // Extract current comments to match by context
         const docComments = buildVCMObjects(doc.getText(), doc.uri.path);
-        const currentCandidates = docComments.filter(c => c.anchor === anchorHash);
 
-        if (currentCandidates.length === 0) {
+        // Find the comment at the selected line
+        const currentComment = docComments.find(c => {
+          if (isInlineComment) {
+            return c.type === "inline" && c.anchor === anchorHash && c.originalLineIndex === selectedLine;
+          } else {
+            // For block comments, check if selected line is within the block
+            if (c.type === "block" && c.block) {
+              return c.block.some(b => b.originalLineIndex === selectedLine);
+            }
+            return false;
+          }
+        });
+
+        if (!currentComment) {
           vscode.window.showWarningMessage("VCM: Could not find a matching comment entry in current file.");
           return;
         }
 
-        // Find the current comment at the selected line
-        let currentComment = currentCandidates.find(c => c.originalLineIndex === selectedLine);
-        if (!currentComment && currentCandidates.length > 0) {
-          currentComment = currentCandidates[0]; // Fallback
-        }
+        // Build context key for current comment
+        const currentKey = buildContextKey(currentComment);
 
-        // Match to VCM comment using context
-        const vcmCandidates = comments.filter(c => c.anchor === anchorHash && c.isPrivate);
+        // Match to VCM comment using context key
+        const vcmCandidates = comments.filter(c => c.isPrivate && buildContextKey(c) === currentKey);
 
         if (vcmCandidates.length === 0) {
           vscode.window.showWarningMessage("VCM: This comment is not marked as private.");
           return;
         }
 
-        let targetVcmComment;
-        if (vcmCandidates.length === 1) {
-          targetVcmComment = vcmCandidates[0];
-        } else {
-          // Use context hashes + text to find best match
-          let bestMatch = null;
-          let bestScore = -1;
-
-          for (const vcm of vcmCandidates) {
-            let score = 0;
-            if (currentComment.prevHash && vcm.prevHash === currentComment.prevHash) {
-              score += 10;
-            }
-            if (currentComment.nextHash && vcm.nextHash === currentComment.nextHash) {
-              score += 10;
-            }
-            // For inline comments, exact text match is highest priority
-            if (isInlineComment && currentComment.text === vcm.text) {
-              score += 100;
-            }
-            if (score > bestScore) {
-              bestScore = score;
-              bestMatch = vcm;
-            }
-          }
-          targetVcmComment = bestMatch || vcmCandidates[0];
-        }
+        // Since we filtered by context key, we should only have exact matches
+        // Take the first one (there should typically be only one)
+        const targetVcmComment = vcmCandidates[0];
 
         // Remove isPrivate flag
         delete targetVcmComment.isPrivate;
