@@ -13,11 +13,11 @@ const { VCMContentProvider } = require("./src/split_view/contentProvider");
 const { hashLine } = require("./src/hash");
 const { injectComments, stripComments } = require("./src/injectExtractComments");
 const { parseDocComs } = require("./src/vcm/parseDocComs");
-const { syncCommentsToVCMs } = require("./src/vcm/syncCommentsToVCMs");
+const { mergeIntoVCMs } = require("./src/vcm/mergeIntoVCMs");
 const { createDetectors } = require("./src/detectModes");
 const { buildContextKey } = require("./src/buildContextKey");
 const { setupSplitViewWatchers, updateSplitViewIfOpen, closeSplitView } = require("./src/split_view/splitViewManager");
-const { loadAllVCMComments } = require("./src/vcm/loadAllVCMComments");
+const { readBothVCMs } = require("./src/vcm/readBothVCMs");
 const { vcmFileExists } = require("./src/vcm/vcmFileExists");
 const { createVCMFiles } = require("./src/vcm/createVCMFiles");
 
@@ -108,7 +108,7 @@ async function activate(context) {
   );
   const { updateAlwaysShow } = require("./src/alwaysShow");
   // TODO: might need to move this lower in the file but seems to be working fine rn
-  const deps = { loadAllVCMComments: (relativePath) => loadAllVCMComments(relativePath, vcmDir), parseDocComs, hashLine };
+  const deps = { readBothVCMs: (relativePath) => readBothVCMs(relativePath, vcmDir), parseDocComs, hashLine };
 
   const { mergeSharedTextCleanMode } = require("./src/mergeTextCleanMode");
 
@@ -131,7 +131,7 @@ async function activate(context) {
   
 
   const { detectInitialMode, detectPrivateVisibility } = createDetectors({
-    loadAllVCMComments: (relativePath) => loadAllVCMComments(relativePath, vcmDir),
+    readBothVCMs: (relativePath) => readBothVCMs(relativePath, vcmDir),
     parseDocComs,
     vscode,
   });
@@ -183,7 +183,7 @@ async function activate(context) {
     const text = doc.getText();
 
     // Load existing VCM data from both shared and private files
-    const { sharedComments: vcmComments, privateComments: existingPrivateComments } = await loadAllVCMComments(relativePath, vcmDir);
+    const { sharedComments: vcmComments, privateComments: existingPrivateComments } = await readBothVCMs(relativePath, vcmDir);
 
     // Get the current mode from our state map
     // IMPORTANT: Once mode is set, it should NEVER change except via manual toggle or undo/redo
@@ -214,11 +214,11 @@ async function activate(context) {
     const docComments = parseDocComs(text, doc.uri.path, allvcmComments, isCleanMode, debugAnchorText);
 
     // ------------------------------------------------------------------------
-    // Merge Strategy - Using syncCommentsToVCMs for both shared and private
+    // Merge Strategy - Using mergeIntoVCMs for both shared and private
     // ------------------------------------------------------------------------
 
     // Process shared comments (these may include isPrivate flags in commented mode)
-    let finalComments = syncCommentsToVCMs({
+    let finalComments = mergeIntoVCMs({
       isCommented,
       docComments,
       vcmComments,
@@ -228,7 +228,7 @@ async function activate(context) {
     });
 
     // Process private comments (updates anchors and content)
-    syncCommentsToVCMs({
+    mergeIntoVCMs({
       isCommented,
       docComments,
       vcmComments: existingPrivateComments,
@@ -333,7 +333,7 @@ async function activate(context) {
     context,
     provider,
     getSplitViewState,
-    (relativePath) => loadAllVCMComments(relativePath, vcmDir),
+    (relativePath) => readBothVCMs(relativePath, vcmDir),
     detectInitialMode,
     detectPrivateVisibility
   );
@@ -400,7 +400,7 @@ async function activate(context) {
       }
 
       // Load ALL VCM comments (shared + private) to check for alwaysShow and isPrivate
-      const { allComments: vcmComments } = await loadAllVCMComments(relativePath, vcmDir);
+      const { allComments: vcmComments } = await readBothVCMs(relativePath, vcmDir);
 
       // Strip comments to show clean version (but keep alwaysShow and private if visible)
       const keepPrivate = privateCommentsVisible.get(doc.uri.fsPath) === true;
@@ -413,7 +413,7 @@ async function activate(context) {
       // Currently in clean mode -> switch to commented mode (show comments)
       try {
         // Load ALL comments (shared + private) to handle includePrivate correctly
-        const { sharedComments: existingSharedComments, privateComments: existingPrivateComments } = await loadAllVCMComments(relativePath, vcmDir);
+        const { sharedComments: existingSharedComments, privateComments: existingPrivateComments } = await readBothVCMs(relativePath, vcmDir);
 
         // Merge text_cleanMode into text/block and clear text_cleanMode for shared comments
         const mergedSharedComments = mergeSharedTextCleanMode(existingSharedComments);
@@ -450,7 +450,7 @@ async function activate(context) {
         await saveVCM(doc, true); // allowCreate = true for explicit toggle action
         try {
           // Load ALL comments (shared + private) after saving
-          const { sharedComments, privateComments } = await loadAllVCMComments(relativePath, vcmDir);
+          const { sharedComments, privateComments } = await readBothVCMs(relativePath, vcmDir);
           const allComments = [...sharedComments, ...privateComments];
 
           // Strip comments before injecting (except alwaysShow and private if visible)
@@ -515,7 +515,7 @@ async function activate(context) {
 
         // Load or create VCM comments
         let comments = [];
-        const { allComments, sharedComments } = await loadAllVCMComments(relativePath, vcmDir);
+        const { allComments, sharedComments } = await readBothVCMs(relativePath, vcmDir);
 
         // If no shared VCM exists - save all extracted comments
         if (!sharedComments || sharedComments.length === 0) {
@@ -552,7 +552,7 @@ async function activate(context) {
           provider,
           relativePath,
           getSplitViewState,
-          (relativePath) => loadAllVCMComments(relativePath, vcmDir)
+          (relativePath) => readBothVCMs(relativePath, vcmDir)
         );
       } catch (err) {
         vscode.window.showErrorMessage("VCM: Error marking comment as Always Show: " + err.message);
@@ -594,7 +594,7 @@ async function activate(context) {
         }
 
         // Load all comments using helper function
-        const { allComments } = await loadAllVCMComments(relativePath, vcmDir);
+        const { allComments } = await readBothVCMs(relativePath, vcmDir);
 
         if (allComments.length === 0) {
           vscode.window.showWarningMessage("VCM: No .vcm file found.");
@@ -678,7 +678,7 @@ async function activate(context) {
           provider,
           relativePath,
           getSplitViewState,
-          (relativePath) => loadAllVCMComments(relativePath, vcmDir)
+          (relativePath) => readBothVCMs(relativePath, vcmDir)
         );
       } catch (err) {
         vscode.window.showErrorMessage("VCM: Error unmarking comment: " + err.message);
@@ -724,7 +724,7 @@ async function activate(context) {
 
         // Load or create VCM comments
         let comments = [];
-        const { allComments } = await loadAllVCMComments(relativePath, vcmDir);
+        const { allComments } = await readBothVCMs(relativePath, vcmDir);
 
         if (allComments.length === 0) {
           // No VCM exists - add only this comment to VCM, marked as private
@@ -850,7 +850,7 @@ async function activate(context) {
         }
 
         // Load all comments from both shared and private
-        const { allComments: comments } = await loadAllVCMComments(relativePath, vcmDir);
+        const { allComments: comments } = await readBothVCMs(relativePath, vcmDir);
 
         // Build context key for current comment
         const currentKey = buildContextKey(currentComment);
@@ -930,7 +930,7 @@ async function activate(context) {
               provider,
               relativePath,
               getSplitViewState,
-              loadAllVCMComments
+              readBothVCMs
             );
           }
         }
@@ -966,7 +966,7 @@ async function activate(context) {
 
       try {
         // Load private comments from private VCM file
-        const { privateComments } = await loadAllVCMComments(relativePath, vcmDir);
+        const { privateComments } = await readBothVCMs(relativePath, vcmDir);
 
         if (privateComments.length === 0) {
           vscode.window.showInformationMessage("VCM: No private comments found in this file.");
@@ -1081,7 +1081,7 @@ async function activate(context) {
         } else {
           // Show private comments - inject them back
           // Load shared comments too
-          const { sharedComments } = await loadAllVCMComments(relativePath, vcmDir);
+          const { sharedComments } = await readBothVCMs(relativePath, vcmDir);
 
           // Check current mode to determine what to show
           const isInCommentedMode = isCommentedMap.get(doc.uri.fsPath);
@@ -1114,7 +1114,7 @@ async function activate(context) {
           provider,
           relativePath,
           getSplitViewState,
-          (relativePath) => loadAllVCMComments(relativePath, vcmDir)
+          (relativePath) => readBothVCMs(relativePath, vcmDir)
         );
 
         // Re-enable sync after a delay to ensure save completes
@@ -1152,7 +1152,7 @@ async function activate(context) {
     // Load comment data from .vcm file, or extract from current file
     let sharedComments, privateComments;
     try {
-      const result = await loadAllVCMComments(relativePath, vcmDir);
+      const result = await readBothVCMs(relativePath, vcmDir);
       sharedComments = result.sharedComments;
       privateComments = result.privateComments;
     } catch {

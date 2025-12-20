@@ -5,7 +5,7 @@ const vscode = require("vscode");
 // ===========================================================================
 
 // Load all comments from both shared and private VCM files
-async function loadAllVCMComments(relativePath, vcmDir) {
+async function readBothVCMs(relativePath, vcmDir) {
   const vcmPrivateDir = vscode.Uri.joinPath(vscode.Uri.joinPath(vcmDir, ".."), "private");
   const sharedFileUri = vscode.Uri.joinPath(vcmDir, relativePath + ".vcm.json");
   const privateFileUri = vscode.Uri.joinPath(vcmPrivateDir, relativePath + ".vcm.json");
@@ -31,5 +31,5 @@ async function loadAllVCMComments(relativePath, vcmDir) {
 }
 
 module.exports = {
-  loadAllVCMComments,
+  readBothVCMs,
 };

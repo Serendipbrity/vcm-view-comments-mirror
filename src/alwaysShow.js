@@ -1,7 +1,7 @@
 const vscode = require("vscode");
 const { buildContextKey } = require("./buildContextKey");
 
-async function updateAlwaysShowContext({ loadAllVCMComments, parseDocComs, hashLine }) {
+async function updateAlwaysShowContext({ readBothVCMs, parseDocComs, hashLine }) {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
       await vscode.commands.executeCommand('setContext', 'vcm.commentIsAlwaysShow', false);
@@ -37,7 +37,7 @@ async function updateAlwaysShowContext({ loadAllVCMComments, parseDocComs, hashL
       }
 
       // Load VCM comments to check flags
-      const { allComments: comments } = await loadAllVCMComments(relativePath);
+      const { allComments: comments } = await readBothVCMs(relativePath);
 
       let isAlwaysShow = false;
       let isPrivate = false;
