@@ -5,7 +5,9 @@
   "publisher": "serendipbrity",
   "description": "Invisible documentation layer for code — keep repos clean, comments versioned.",
   "icon": "icon.png",
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./vcm.js",
   "engines": {
     "vscode": "^1.90.0"
@@ -13,6 +15,16 @@
   "contributes": {
     "menus": {
       "editor/context": [
+        {
+          "command": "vcm-view-comments-mirror.markFrozen",
+          "when": "vcm.cursorOnComment && !vcm.commentIsFrozen",
+          "group": "navigation@1"
+        },
+        {
+          "command": "vcm-view-comments-mirror.unmarkFrozen",
+          "when": "vcm.cursorOnComment && vcm.commentIsFrozen",
+          "group": "navigation@1"
+        },
         {
           "command": "vcm-view-comments-mirror.markAlwaysShow",
           "when": "vcm.cursorOnComment && !vcm.commentIsAlwaysShow && !vcm.commentIsPrivate",
@@ -39,19 +51,26 @@
       "type": "object",
       "title": "VCM Settings",
       "properties": {
-        "vcm-view-comments-mirror.preserveBlockSpacing": {
-          "type": "boolean",
-          "default": true,
-          "description": "Preserve visible blank lines after block comments in clean mode."
-        },
         "vcm-view-comments-mirror.moveCommentWithAnchor": {
           "type": "boolean",
           "default": false,
-          "description": "Preserve visible blank lines after block comments in clean mode."
+          "description": "Move or delete comments with code edits when in clean mode."
         }
       }
     },
     "commands": [
+      {
+        "command": "vcm-view-comments-mirror.clearState",
+        "title": "VCM: Clear State"
+      },
+      {
+        "command": "vcm-view-comments-mirror.markFrozen",
+        "title": "VCM: Freeze Comment"
+      },
+      {
+        "command": "vcm-view-comments-mirror.unmarkFrozen",
+        "title": "VCM: Unfreeze Comment"
+      },
       {
         "command": "vcm-view-comments-mirror.toggleCurrentFileComments",
         "title": "VCM: --- Current File: --- View/Hide Comments"
@@ -116,5 +135,8 @@
   "scripts": {
     "build:vsix": "vsce package && code --install-extension *.vsix --force"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "nodemon": "^3.1.11"
+  }
 }
