@@ -2,7 +2,7 @@ const { buildContextKey } = require("./buildContextKey");
 
 function createDetectors({
   loadAllVCMComments,
-  buildVCMObjects,
+  parseDocComs,
   vscode,
 }) {
 
@@ -20,7 +20,7 @@ function createDetectors({
       // No shared VCM → user never used clean/commented.
       // Just say "commented" if the file has any comments at all.
       if (sharedComments.length === 0) {
-        const vcmObjects = buildVCMObjects(doc.getText(), doc.uri.path);
+        const vcmObjects = parseDocComs(doc.getText(), doc.uri.path);
         return vcmObjects.length > 0;
       }
 
@@ -38,7 +38,7 @@ function createDetectors({
       const anchorKey = buildContextKey(anchorShared);
 
       const text = doc.getText();
-      const vcmObjects = buildVCMObjects(text, doc.uri.path);
+      const vcmObjects = parseDocComs(text, doc.uri.path);
 
       // 1) Strong match: by anchor key
       const foundByKey = vcmObjects.some((obj) => buildContextKey(obj) === anchorKey);
@@ -72,7 +72,7 @@ function createDetectors({
       return foundByText; // true = commented, false = clean
     } catch {
       // VCM missing/unreadable -> just fall back to "does this file have comments?"
-      const vcmObjects = buildVCMObjects(doc.getText(), doc.uri.path);
+      const vcmObjects = parseDocComs(doc.getText(), doc.uri.path);
       return vcmObjects.length > 0;
     }
   }
@@ -92,7 +92,7 @@ function createDetectors({
 
       // Extract current comments from document (only need to check if ONE exists)
       const text = doc.getText();
-      const docComments = buildVCMObjects(text, doc.uri.path);
+      const docComments = parseDocComs(text, doc.uri.path);
 
       // Only check the first private comment for efficiency (if one is visible, they all should be)
       const firstPrivate = privateComments[0];

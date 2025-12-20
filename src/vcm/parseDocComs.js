@@ -1,14 +1,14 @@
 const { getCommentMarkersForFile } = require("../commentMarkers");
 const { hashLine } = require("../hash");
 // ===========================================================
-// buildVCMObjects
+// parseDocComs
 // ===========================================================
 // This builds the raw, current, real-time comment objects extracted from the document
 // and generates their anchors / hashes
 // type: "inline" or "block"
 // exact text + line indices
 // anchor, prevHash, nextHash
-function buildVCMObjects(text, filePath, debugAnchorText = false) {
+function parseDocComs(text, filePath, debugAnchorText = false) {
   const lines = text.split("\n"); // Splits file text into an array of individual lines.
   const comments = [];      // Final array of all extracted comments
   let commentBuffer = [];   // Temporary holding area for consecutive comment lines
@@ -181,5 +181,5 @@ function buildVCMObjects(text, filePath, debugAnchorText = false) {
 }
 
 module.exports = {
-  buildVCMObjects,
+  parseDocComs,
 };

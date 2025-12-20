@@ -1,7 +1,7 @@
 const vscode = require("vscode");
 const { buildContextKey } = require("./buildContextKey");
 
-async function updateAlwaysShowContext({ loadAllVCMComments, buildVCMObjects, hashLine }) {
+async function updateAlwaysShowContext({ loadAllVCMComments, parseDocComs, hashLine }) {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
       await vscode.commands.executeCommand('setContext', 'vcm.commentIsAlwaysShow', false);
@@ -15,7 +15,7 @@ async function updateAlwaysShowContext({ loadAllVCMComments, buildVCMObjects, ha
 
     try {
       // Extract current comments and find the one at cursor position
-      const docComments = buildVCMObjects(doc.getText(), doc.uri.path);
+      const docComments = parseDocComs(doc.getText(), doc.uri.path);
 
       // Find the comment at the current cursor position
       const commentAtCursor = docComments.find(curr => {

@@ -1,6 +1,6 @@
 const { getCommentMarkersForFile } = require("./commentMarkers");
 const { hashLine } = require("./hash");
-const { buildVCMObjects } = require("./vcm/buildVCMObjects");
+const { parseDocComs } = require("./vcm/parseDocComs");
 
 // -----------------------------------------------------------------------------
 // Comment Injection
@@ -338,7 +338,7 @@ function stripComments(text, filePath, vcmComments = [], keepPrivate = false, is
   // # TODO revisit this for the spacing stuff
   // Extract current comments to identify blank lines within comment blocks
   // Pass vcmComments and mode so blank line extraction works correctly
-  const docComments = buildVCMObjects(text, filePath, vcmComments, isCleanMode);
+  const docComments = parseDocComs(text, filePath, vcmComments, isCleanMode);
 
   // Build sets for tracking lines
   const allCommentBlockLines = new Set();
