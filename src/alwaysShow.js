@@ -20,9 +20,9 @@ async function updateAlwaysShowContext({ loadAllVCMComments, buildVCMObjects, ha
       // Find the comment at the current cursor position
       const commentAtCursor = docComments.find(curr => {
         if (curr.type === "inline") {
-          return curr.originalLineIndex === selectedLine;
+          return curr.commentedLineIndex === selectedLine;
         } else if (curr.type === "block" && curr.block) {
-          return curr.block.some(b => b.originalLineIndex === selectedLine);
+          return curr.block.some(b => b.commentedLineIndex === selectedLine);
         }
         return false;
       });

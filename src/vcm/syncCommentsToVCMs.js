@@ -255,7 +255,7 @@ function syncCommentsToVCMs({
             existing.anchor = current.anchor;
             existing.prevHash = current.prevHash;
             existing.nextHash = current.nextHash;
-            existing.originalLineIndex = current.originalLineIndex;
+            existing.commentedLineIndex = current.commentedLineIndex;
             // Update content
             existing.text = current.text;
             existing.block = current.block;

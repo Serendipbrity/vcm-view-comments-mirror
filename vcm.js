@@ -501,9 +501,9 @@ async function activate(context) {
         // Find the comment at the selected line
         const commentAtCursor = docComments.find(c => {
           if (c.type === "inline") {
-            return c.originalLineIndex === selectedLine;
+            return c.commentedLineIndex === selectedLine;
           } else if (c.type === "block" && c.block) {
-            return c.block.some(b => b.originalLineIndex === selectedLine);
+            return c.block.some(b => b.commentedLineIndex === selectedLine);
           }
           return false;
         });
@@ -581,9 +581,9 @@ async function activate(context) {
         // Find the comment at the selected line
         const commentAtCursor = docComments.find(c => {
           if (c.type === "inline") {
-            return c.originalLineIndex === selectedLine;
+            return c.commentedLineIndex === selectedLine;
           } else if (c.type === "block" && c.block) {
-            return c.block.some(b => b.originalLineIndex === selectedLine);
+            return c.block.some(b => b.commentedLineIndex === selectedLine);
           }
           return false;
         });
@@ -636,13 +636,13 @@ async function activate(context) {
           if (matchingComment) {
             if (matchingComment.type === "block" && matchingComment.block) {
               // Remove all lines in the block (from first to last)
-              const firstLine = Math.min(...matchingComment.block.map(b => b.originalLineIndex));
-              const lastLine = Math.max(...matchingComment.block.map(b => b.originalLineIndex));
+              const firstLine = Math.min(...matchingComment.block.map(b => b.commentedLineIndex));
+              const lastLine = Math.max(...matchingComment.block.map(b => b.commentedLineIndex));
               const range = new vscode.Range(firstLine, 0, lastLine + 1, 0);
               edit.delete(doc.uri, range);
             } else if (matchingComment.type === "inline") {
               // Remove just the inline comment part (keep the code)
-              const lineText = doc.lineAt(matchingComment.originalLineIndex).text;
+              const lineText = doc.lineAt(matchingComment.commentedLineIndex).text;
               const commentMarkers = getCommentMarkersForFile(doc.uri.path);
 
               // Find where the comment starts
@@ -657,8 +657,8 @@ async function activate(context) {
 
               if (commentStartIdx >= 0) {
                 const range = new vscode.Range(
-                  matchingComment.originalLineIndex, commentStartIdx,
-                  matchingComment.originalLineIndex, lineText.length
+                  matchingComment.commentedLineIndex, commentStartIdx,
+                  matchingComment.commentedLineIndex, lineText.length
                 );
                 edit.delete(doc.uri, range);
               }
@@ -707,9 +707,9 @@ async function activate(context) {
         // Find the comment at the selected line
         const commentAtCursor = docComments.find(c => {
           if (c.type === "inline") {
-            return c.originalLineIndex === selectedLine;
+            return c.commentedLineIndex === selectedLine;
           } else if (c.type === "block" && c.block) {
-            return c.block.some(b => b.originalLineIndex === selectedLine);
+            return c.block.some(b => b.commentedLineIndex === selectedLine);
           }
           return false;
         });
@@ -769,12 +769,12 @@ async function activate(context) {
 
             if (commentAtCursor.type === "block" && commentAtCursor.block) {
               // Remove the entire block
-              const firstLine = commentAtCursor.block[0].originalLineIndex;
-              const lastLine = commentAtCursor.block[commentAtCursor.block.length - 1].originalLineIndex;
+              const firstLine = commentAtCursor.block[0].commentedLineIndex;
+              const lastLine = commentAtCursor.block[commentAtCursor.block.length - 1].commentedLineIndex;
               edit.delete(doc.uri, new vscode.Range(firstLine, 0, lastLine + 1, 0));
             } else if (commentAtCursor.type === "inline") {
               // Remove inline comment from the line
-              const currentLine = doc.lineAt(commentAtCursor.originalLineIndex);
+              const currentLine = doc.lineAt(commentAtCursor.commentedLineIndex);
               const commentMarkers = getCommentMarkersForFile(doc.uri.path);
               let commentStartIdx = -1;
 
@@ -837,9 +837,9 @@ async function activate(context) {
         // Find the comment at the selected line
         const currentComment = docComments.find(c => {
           if (c.type === "inline") {
-            return c.originalLineIndex === selectedLine;
+            return c.commentedLineIndex === selectedLine;
           } else if (c.type === "block" && c.block) {
-            return c.block.some(b => b.originalLineIndex === selectedLine);
+            return c.block.some(b => b.commentedLineIndex === selectedLine);
           }
           return false;
         });
@@ -892,13 +892,13 @@ async function activate(context) {
           if (matchingComment) {
             if (matchingComment.type === "block" && matchingComment.block) {
               // Remove all lines in the block (from first to last)
-              const firstLine = Math.min(...matchingComment.block.map(b => b.originalLineIndex));
-              const lastLine = Math.max(...matchingComment.block.map(b => b.originalLineIndex));
+              const firstLine = Math.min(...matchingComment.block.map(b => b.commentedLineIndex));
+              const lastLine = Math.max(...matchingComment.block.map(b => b.commentedLineIndex));
               const range = new vscode.Range(firstLine, 0, lastLine + 1, 0);
               edit.delete(doc.uri, range);
             } else if (matchingComment.type === "inline") {
               // Remove just the inline comment part (keep the code)
-              const lineText = doc.lineAt(matchingComment.originalLineIndex).text;
+              const lineText = doc.lineAt(matchingComment.commentedLineIndex).text;
 
               // Find where the comment starts
               let commentStartIndex = -1;
@@ -913,9 +913,9 @@ async function activate(context) {
 
               if (commentStartIndex > 0) {
                 const range = new vscode.Range(
-                  matchingComment.originalLineIndex,
+                  matchingComment.commentedLineIndex,
                   commentStartIndex,
-                  matchingComment.originalLineIndex,
+                  matchingComment.commentedLineIndex,
                   lineText.length
                 );
                 edit.delete(doc.uri, range);
@@ -1012,7 +1012,7 @@ async function activate(context) {
           for (const block of privateBlocksToRemove) {
             if (block.block) {
               for (const blockLine of block.block) {
-                linesToRemove.add(blockLine.originalLineIndex);
+                linesToRemove.add(blockLine.commentedLineIndex);
               }
             }
           }
@@ -1026,7 +1026,7 @@ async function activate(context) {
             let line = lines[i];
 
             // Check if this line has a private inline comment to remove
-            // Match by context (prevHash + nextHash), not by originalLineIndex which can shift
+            // Match by context (prevHash + nextHash), not by commentedLineIndex which can shift
             const inlineToRemove = privateInlinesToRemove.find(c => {
               // Find the actual line this comment should be on using its anchor
               const codeOnly = line.split(/\s+\/\/|\s+#/).slice(0, 1)[0].trimEnd();

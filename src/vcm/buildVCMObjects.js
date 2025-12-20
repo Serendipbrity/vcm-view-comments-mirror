@@ -66,7 +66,7 @@ function buildVCMObjects(text, filePath, debugAnchorText = false) {
       // Store the ENTIRE line as-is (includes indent, marker, spacing, text, trailing spaces)
       commentBuffer.push({
         text: line,           // Full line exactly as it appears
-        originalLineIndex: i,      // 0-based line index
+        commentedLineIndex: i,      // 0-based line index
       });
       continue; // Don’t finalize it yet. move to next line. You might be in the middle of a comment block.
     }
@@ -78,7 +78,7 @@ function buildVCMObjects(text, filePath, debugAnchorText = false) {
       if (commentBuffer.length > 0) {
         commentBuffer.push({
           text: line,           // Empty or whitespace-only line
-          originalLineIndex: i, // 0-based line index
+          commentedLineIndex: i, // 0-based line index
         });
       }
       // Skip blank lines that are before any comments (they're just file spacing)
@@ -107,7 +107,7 @@ function buildVCMObjects(text, filePath, debugAnchorText = false) {
         anchor: hashLine(anchorBase, 0), // hash of the line's code (for identification later),
         prevHash: prevIdx >= 0 ? hashLine(lines[prevIdx], 0) : null,
         nextHash: nextIdx >= 0 ? hashLine(lines[nextIdx], 0) : null,
-        originalLineIndex: i, // the line number it appeared on (changes per mode so not reliable alone)
+        commentedLineIndex: i, // the line number it appeared on (changes per mode so not reliable alone)
         text: fullComment,  // Store ALL inline comments as one combined text
       };
 

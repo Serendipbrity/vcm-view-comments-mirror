@@ -112,20 +112,20 @@ function injectComments(cleanText, comments, includePrivate = false) {
     return scores[0].idx; // Return the index with highest contextual match.
   };
 
-  // Separate block comments by type and sort by originalLineIndex
+  // Separate block comments by type and sort by commentedLineIndex
   // Ensure that when you loop through comments, they’re in natural file order, not random JSON order.
   // .sort(...) orders the comment blocks from top to bottom according to where they originally appeared by line number in the file.
   // That way, when you inject them, they’re added in the same vertical order they were extracted.
   const blockComments = commentsToInject.filter(c => c.type === "block").sort((a, b) => {
     // Each block comment object has a block array. each el = 1 comment line of the block
-    // a.block[0]?.originalLineIndex → accesses the first line of that block (top of the comment) and gets its original line number in the old file.
+    // a.block[0]?.commentedLineIndex → accesses the first line of that block (top of the comment) and gets its original line number in the old file.
     // The ?. (optional chaining) avoids errors if block or [0] doesn’t exist (so it returns undefined instead of crashing).
     // || 0 = “if we can’t find its original position, assume line 0.”
-    const aLine = a.block[0]?.originalLineIndex || 0; 
-    const bLine = b.block[0]?.originalLineIndex || 0;
+    const aLine = a.block[0]?.commentedLineIndex || 0; 
+    const bLine = b.block[0]?.commentedLineIndex || 0;
     return aLine - bLine; // sort them ascending (smallest line number - top of file first).
   });
-  const inlineComments = commentsToInject.filter(c => c.type === "inline").sort((a, b) => a.originalLineIndex - b.originalLineIndex);
+  const inlineComments = commentsToInject.filter(c => c.type === "inline").sort((a, b) => a.commentedLineIndex - b.commentedLineIndex);
 
   // Track which indices we've already used
   const usedIndices = new Set();
@@ -352,34 +352,34 @@ function stripComments(text, filePath, vcmComments = [], keepPrivate = false, is
       // Track all lines in all comment blocks (including blank lines WITHIN them)
       // But DO NOT track leading/trailing blank lines - those should stay visible in ALL modes
       for (const blockLine of current.block) {
-        allCommentBlockLines.add(blockLine.originalLineIndex);
+        allCommentBlockLines.add(blockLine.commentedLineIndex);
       }
 
       // If this block is alwaysShow, also add to alwaysShow set
       const currentKey = buildContextKey(current);
       if (alwaysShowKeys.has(currentKey)) {
         for (const blockLine of current.block) {
-          alwaysShowLines.add(blockLine.originalLineIndex);
+          alwaysShowLines.add(blockLine.commentedLineIndex);
         }
       }
 
       // If this block is private and we're keeping private, add to private set
       if (privateKeys.has(currentKey)) {
         for (const blockLine of current.block) {
-          privateLines.add(blockLine.originalLineIndex);
+          privateLines.add(blockLine.commentedLineIndex);
         }
       }
     } else if (current.type === "inline") {
       const currentKey = buildContextKey(current);
       if (alwaysShowKeys.has(currentKey)) {
         // For alwaysShow inline comments, store the line index and text
-        alwaysShowLines.add(current.originalLineIndex);
-        alwaysShowInlineComments.set(current.originalLineIndex, current.text || "");
+        alwaysShowLines.add(current.commentedLineIndex);
+        alwaysShowInlineComments.set(current.commentedLineIndex, current.text || "");
       }
       if (privateKeys.has(currentKey)) {
         // For private inline comments (if keeping), store the line index and text
-        privateLines.add(current.originalLineIndex);
-        privateInlineComments.set(current.originalLineIndex, current.text || "");
+        privateLines.add(current.commentedLineIndex);
+        privateInlineComments.set(current.commentedLineIndex, current.text || "");
       }
     }
   }
