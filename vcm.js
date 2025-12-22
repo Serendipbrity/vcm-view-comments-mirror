@@ -20,7 +20,7 @@ const { setupSplitViewWatchers, updateSplitViewIfOpen, closeSplitView } = requir
 const { readBothVCMs } = require("./src/vcm/readBothVCMs");
 const { vcmFileExists } = require("./src/vcm/vcmFileExists");
 const { createVCMFiles } = require("./src/vcm/createVCMFiles");
-const { findInlineCommentStart } = require("./src/vcm/parseDocComs");
+const { findInlineCommentStart, isolateCodeLine, findPrevNextCodeLine } = require("./src/lineUtils");
 const { updateAlwaysShow } = require("./src/alwaysShow");
 const { mergeSharedTextCleanMode } = require("./src/mergeTextCleanMode");
 
@@ -1133,8 +1133,8 @@ async function activate(context) {
             }
 
             if (commentStartIdx >= 0) {
-              // Code-only portion (this must match how parseDocComs builds anchorBase)
-              const anchorBase = line.substring(0, commentStartIdx).trimEnd();
+              // Code-only portion
+              const anchorBase = isolateCodeLine(line, commentMarkers);
 
               // Find prev/next CODE lines (skip blank + comment-only lines)
               const isCommentOnlyLine = (l) => {
@@ -1143,31 +1143,14 @@ async function activate(context) {
                 return commentMarkers.some(m => t.startsWith(m));
               };
 
-              let prevIdx = -1;
-              for (let j = i - 1; j >= 0; j--) {
-                const t = lines[j].trim();
-                if (!t) continue;
-                if (isCommentOnlyLine(lines[j])) continue;
-                prevIdx = j;
-                break;
-              }
+              const { prevIdx, nextIdx } = findPrevNextCodeLine(i, lines, isCommentOnlyLine);
 
-              let nextIdx = -1;
-              for (let j = i + 1; j < lines.length; j++) {
-                const t = lines[j].trim();
-                if (!t) continue;
-                if (isCommentOnlyLine(lines[j])) continue;
-                nextIdx = j;
-                break;
-              }
-
-              // IMPORTANT: prev/next hashes should be based on the full code line as stored in file.
-              // If you want these hashes to be code-only too, change parseDocComs to match.
+              // Use isolateCodeLine for prev/next hashes to match parseDocComs
               const currentObj = {
                 type: "inline",
                 anchor: hashLine(anchorBase, 0),
-                prevHash: prevIdx >= 0 ? hashLine(lines[prevIdx], 0) : null,
-                nextHash: nextIdx >= 0 ? hashLine(lines[nextIdx], 0) : null,
+                prevHash: prevIdx >= 0 ? hashLine(isolateCodeLine(lines[prevIdx], commentMarkers), 0) : null,
+                nextHash: nextIdx >= 0 ? hashLine(isolateCodeLine(lines[nextIdx], commentMarkers), 0) : null,
               };
 
               const currentKey = buildContextKey(currentObj);
@@ -1379,6 +1362,7 @@ async function activate(context) {
             } else {
               // Multiple lines have the same anchor - use context hashes to disambiguate
               const splitLines = vcmEditor.document.getText().split("\n");
+              const commentMarkers = getCommentMarkersForFile(doc.uri.path);
 
               targetLine = anchorLines.find(lineIdx => {
                 // Check if prev/next lines match the comment's context
@@ -1386,9 +1370,9 @@ async function activate(context) {
                 const nextLine = lineIdx < splitLines.length - 1 ? splitLines[lineIdx + 1] : null;
 
                 const prevMatches = clickedComment.prevHash === null ||
-                  (prevLine && hashLine(prevLine, 0) === clickedComment.prevHash);
+                  (prevLine && hashLine(isolateCodeLine(prevLine, commentMarkers), 0) === clickedComment.prevHash);
                 const nextMatches = clickedComment.nextHash === null ||
-                  (nextLine && hashLine(nextLine, 0) === clickedComment.nextHash);
+                  (nextLine && hashLine(isolateCodeLine(nextLine, commentMarkers), 0) === clickedComment.nextHash);
 
                 return prevMatches && nextMatches;
               });
@@ -1492,6 +1476,7 @@ async function activate(context) {
             } else {
               // Multiple lines have the same anchor - use context hashes to disambiguate
               const sourceLines = sourceEditor.document.getText().split("\n");
+              const commentMarkers = getCommentMarkersForFile(doc.uri.path);
 
               sourceLine = anchorLines.find(lineIdx => {
                 // Check if prev/next lines match the comment's context
@@ -1499,9 +1484,9 @@ async function activate(context) {
                 const nextLine = lineIdx < sourceLines.length - 1 ? sourceLines[lineIdx + 1] : null;
 
                 const prevMatches = clickedComment.prevHash === null ||
-                  (prevLine && hashLine(prevLine, 0) === clickedComment.prevHash);
+                  (prevLine && hashLine(isolateCodeLine(prevLine, commentMarkers), 0) === clickedComment.prevHash);
                 const nextMatches = clickedComment.nextHash === null ||
-                  (nextLine && hashLine(nextLine, 0) === clickedComment.nextHash);
+                  (nextLine && hashLine(isolateCodeLine(nextLine, commentMarkers), 0) === clickedComment.nextHash);
 
                 return prevMatches && nextMatches;
               });

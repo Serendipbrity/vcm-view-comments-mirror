@@ -1,5 +1,6 @@
 const { getCommentMarkersForFile } = require("./commentMarkers");
 const { hashLine } = require("./hash");
+const { isolateCodeLine } = require("./lineUtils");
 const { parseDocComs } = require("./vcm/parseDocComs");
 
 // -----------------------------------------------------------------------------
@@ -9,10 +10,14 @@ const { parseDocComs } = require("./vcm/parseDocComs");
 // cleanText → the code in clean mode (with comments stripped out).
 // comments → parsed metadata previously extracted from the commented version (what you want to re-inject).
 // includePrivate → flag to decide whether to re-insert private comments.. Default to privatemode off unless specified to avoid undefined
-function injectComments(cleanText, comments, includePrivate = false) {
+// filePath → needed to get comment markers for isolateCodeLine
+function injectComments(cleanText, comments, includePrivate = false, filePath = '') {
   // split("\n") turns the code into an array of lines so you can loop by index.
   const lines = cleanText.split("\n");
-  const result = [];  // Where you’ll push lines and comments in order, then join back later.
+  const result = [];  // Where you'll push lines and comments in order, then join back later.
+
+  // Get comment markers for this file type
+  const commentMarkers = filePath ? getCommentMarkersForFile(filePath) : [];
 
   // Include/exclude private comments based on if includePrivate is toggled on or off
   const commentsToInject = comments.filter(c => {
@@ -31,7 +36,8 @@ function injectComments(cleanText, comments, includePrivate = false) {
       // Hash each unique content line
       // Takes the current line’s code content (not line number) and generates a deterministic hash.
       // Hashes let you re-anchor comments even if the code is moved up or down because you can later match by the same hash.
-      const hash = hashLine(lines[i], 0); 
+      const codeIdentity = isolateCodeLine(lines[i], commentMarkers);
+      const hash = hashLine(codeIdentity, 0); 
       if (!lineHashToIndices.has(hash)) { // If this hash hasn’t been seen before
         lineHashToIndices.set(hash, []); // Create a new list as its value in the map.
       }
@@ -86,16 +92,16 @@ function injectComments(cleanText, comments, includePrivate = false) {
         }
       }
 
-      // Compare these neighbor lines to the comment’s stored hashes and score based on matching context
+      // Compare these neighbor lines to the comment's stored hashes and score based on matching context
       // Add 10 points for each matching context hash.
       // Higher score = better contextual fit.
       if (comment.prevHash && prevIdx >= 0) {
-        const prevHash = hashLine(lines[prevIdx], 0);
+        const prevHash = hashLine(isolateCodeLine(lines[prevIdx], commentMarkers), 0);
         if (prevHash === comment.prevHash) score += 10;
       }
 
       if (comment.nextHash && nextIdx >= 0) {
-        const nextHash = hashLine(lines[nextIdx], 0);
+        const nextHash = hashLine(isolateCodeLine(lines[nextIdx], commentMarkers), 0);
         if (nextHash === comment.nextHash) score += 10;
       }
 

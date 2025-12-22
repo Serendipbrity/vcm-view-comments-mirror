@@ -1,3 +1,4 @@
+const { findInlineCommentStart, isolateCodeLine, findPrevNextCodeLine } = require("../lineUtils");
 const { getCommentMarkersForFile } = require("../commentMarkers");
 const { hashLine } = require("../hash");
 // ===========================================================
@@ -18,7 +19,8 @@ function parseDocComs(text, filePath) {
   
   // Helper: Check if a line is a comment or code
   const isComment = (l) => {
-    const trimmed = l.trim(); // Remove whitespace
+    const trimmed = (l || "").trim();
+ // Remove whitespace
     for (const marker of commentMarkers) { // loop over all possible markers for this file
       // Check whether the line begins with any marker and return true if so
       if (trimmed.startsWith(marker)) return true;
@@ -26,27 +28,6 @@ function parseDocComs(text, filePath) {
     return false; // not a comment line
   };
 
-  // Helper: Find the next non-blank code line after index i
-  const findNextCodeLine = (startIndex) => {
-    for (let j = startIndex + 1; j < lines.length; j++) { // Loops forward from the given index.
-      const trimmed = lines[j].trim();
-      if (trimmed && !isComment(lines[j])) { // Skip blank lines and comments.
-        return j; // return code lines index
-      }
-    }
-    return -1; // no code line was found after this point (end of file). So that nextHash becomes null instead of blowing up
-  };
-
-  // Helper: Find the previous non-blank code line before index i
-  const findPrevCodeLine = (startIndex) => {
-    for (let j = startIndex - 1; j >= 0; j--) {
-      const trimmed = lines[j].trim();
-      if (trimmed && !isComment(lines[j])) {
-        return j; // index of next line of code
-      }
-    }
-    return -1; // no code line was found after this point (end of file). So that nextHash becomes null instead of blowing up
-  };
 
   // Process each line sequentially
   for (let i = 0; i < lines.length; i++) {
@@ -76,80 +57,91 @@ function parseDocComs(text, filePath) {
       // Skip blank lines that are before any comments (they're just file spacing)
       continue;
     }
+
+    // Inline comment detection on a code line
     const commentStartIndex = findInlineCommentStart(line, commentMarkers, { requireWhitespaceBefore: true });
 
     if (commentStartIndex >= 0) {
       const fullComment = line.substring(commentStartIndex); // extract from that point to the end → the whole inline comment.
 
-      // Context line hashes that are before and after
-      const prevIdx = findPrevCodeLine(i);
-      const nextIdx = findNextCodeLine(i);
+      const { prevIdx, nextIdx } = findPrevNextCodeLine(i, lines, isComment);
 
+      const prevHash =
+        prevIdx >= 0 ? hashLine(isolateCodeLine(lines[prevIdx], commentMarkers), 0) : null;
+
+      const nextHash =
+        nextIdx >= 0 ? hashLine(isolateCodeLine(lines[nextIdx], commentMarkers), 0) : null;
+
+      const anchorText = isolateCodeLine(line, commentMarkers);
       // Hash only the code portion before the first inline comment marker
-      const anchorBase = line.substring(0, commentStartIndex).trimEnd();
+      const anchorBase = hashLine(anchorText, 0);
 
-      const inlineComment = {
+      comments.push({
         type: "inline",
-        anchor: hashLine(anchorBase, 0), // hash of the line's code (for identification later),
-        prevHash: prevIdx >= 0 ? hashLine(lines[prevIdx], 0) : null,
-        nextHash: nextIdx >= 0 ? hashLine(lines[nextIdx], 0) : null,
-        commentedLineIndex: i, // the line number it appeared on (changes per mode so not reliable alone)
+        anchor: anchorBase, // hash of the line's code (for identification later),
+        prevHash,
+        nextHash,
+        commentedLineIndex: i,      // 0-based line index
         text: fullComment,  // Store ALL inline comments as one combined text
-      };
-      
-      inlineComment.anchorText = anchorBase;
-
-      comments.push(inlineComment);
+        anchorText,
+      });
     }
 
     // CASE 3: We have buffered comment lines (comment group) above this code line
     // Attach the entire comment block to this line of code
     if (commentBuffer.length > 0) {
-      // Store context: previous code line and next code line
-      const prevIdx = findPrevCodeLine(i);
-      const nextIdx = findNextCodeLine(i);
+      const { prevIdx, nextIdx } = findPrevNextCodeLine(i, lines, isComment);
 
-      // DO NOT include leading or trailing blanks - they should persist in clean mode as spacing
-      // Only store the actual comment lines (which may include blanks BETWEEN comment lines)
-      const fullBlock = commentBuffer;
+      const prevHash =
+        prevIdx >= 0 ? hashLine(isolateCodeLine(lines[prevIdx], commentMarkers), 0) : null;
 
-      const blockComment = {
+      const nextHash =
+        nextIdx >= 0 ? hashLine(isolateCodeLine(lines[nextIdx], commentMarkers), 0) : null;
+
+      const anchorText = isolateCodeLine(line, commentMarkers);
+      // Hash only the code portion before the first inline comment marker
+      const anchorBase = hashLine(anchorText, 0);
+
+      comments.push({
         type: "block",
-        anchor: hashLine(line.trimEnd(), 0), // Just content hash
-        prevHash: prevIdx >= 0 ? hashLine(lines[prevIdx], 0) : null,
-        nextHash: nextIdx >= 0 ? hashLine(lines[nextIdx], 0) : null,
+        anchor: anchorBase, // Just content hash
+        prevHash,
+        nextHash,
         insertAbove: true, // when re-adding comments, they should appear above that line.
-        block: fullBlock,
-      };
+        block: commentBuffer,
+        anchorText,
+      });
 
-        blockComment.anchorText = line;
-
-      comments.push(blockComment);
       commentBuffer = []; // Clear buffer for next block
     }
   }
 
-  // CASE 4: Handle comments at the top of file (before any code)
-  // These are typically file headers, copyright notices, or module docstrings
+  // Header comment block (comment-only lines at EOF or before any code)
   if (commentBuffer.length > 0) {
     // Find the first actual line of code in the file
     const firstCodeIndex = lines.findIndex((l) => l.trim() && !isComment(l));
     const anchorLine = firstCodeIndex >= 0 ? firstCodeIndex : 0;
 
-    // For file header comments, there's no previous code line
-    const nextIdx = findNextCodeLine(anchorLine - 1);
+    // Use anchorLine-1 so "next" resolves to the first code line
+    const { nextIdx } = findPrevNextCodeLine(anchorLine - 1, lines, isComment);
+
+    const nextHash =
+      nextIdx >= 0 ? hashLine(isolateCodeLine(lines[nextIdx], commentMarkers), 0) : null;
+
+    const anchorText = isolateCodeLine(lines[anchorLine] || "", commentMarkers);
+
+    // Hash only the code portion before the first inline comment marker
+    const anchorBase = hashLine(anchorText, 0);
 
     const headerComment = {
       type: "block",
-      anchor: hashLine((lines[anchorLine]).trimEnd() || "", 0), // Just content hash
+      anchor: anchorBase,
       prevHash: null, // No previous code line before file header
-      nextHash: nextIdx >= 0 ? hashLine(lines[nextIdx], 0) : null,
+      nextHash,
       insertAbove: true,
       block: commentBuffer,
+      anchorText,
     };
-
-      headerComment.anchorText = (lines[anchorLine]).trimEnd() || "";
-
     // Insert this block at the beginning of the comments array
     comments.unshift(headerComment);
   }
@@ -157,49 +149,4 @@ function parseDocComs(text, filePath) {
   return comments;
 }
 
-function findInlineCommentStart(line, commentMarkers, { requireWhitespaceBefore = true } = {}) {
-  let inString = false;
-  let stringChar = null;
-  let escaped = false;
-
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-
-    if (escaped) { escaped = false; continue; }
-    if (char === "\\") { escaped = true; continue; }
-
-    // Enter string
-    if (!inString && (char === '"' || char === "'" || char === "`")) {
-      inString = true;
-      stringChar = char;
-      continue;
-    }
-
-    // Exit string
-    if (inString && char === stringChar) {
-      inString = false;
-      stringChar = null;
-      continue;
-    }
-
-    if (inString) continue;
-
-    // Outside strings: detect markers
-    for (const marker of commentMarkers) {
-      // does the marker occur starting at i?
-      if (line.startsWith(marker, i)) {
-        if (!requireWhitespaceBefore) return i;
-
-        // require whitespace immediately before marker
-        if (i > 0 && /\s/.test(line[i - 1])) return i - 1;
-      }
-    }
-  }
-
-  return -1;
-}
-
-module.exports = {
-  parseDocComs,
-  findInlineCommentStart
-};
+module.exports = { parseDocComs };
