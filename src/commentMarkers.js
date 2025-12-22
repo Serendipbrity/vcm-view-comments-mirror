@@ -1,5 +1,8 @@
-// Comment markers per file type - single source of truth for all languages
-const COMMENT_MARKERS = {
+// Default fallback markers for unknown file types
+const DEFAULT_LINE_MARKERS = ['#', '//', '--', '%', ';'];
+
+// LINE comment markers per file type (no closing delimiter)
+const LINE_COMMENT_MARKERS = {
   // Python-family
   'py': ['#'],
   'python': ['#'],
@@ -119,10 +122,10 @@ const COMMENT_MARKERS = {
   'yml': ['#'],
   'env': ['#'],
 
-  // Markdown / Docs
-  'md': ['<!--'],
-  'markdown': ['<!--'],
-  'rst': ['..'], // reStructuredText
+  // Docs / Markup — no line comments
+  'md': [],
+  'markdown': [],
+  'rst': [],
 };
 
 // Get comment markers for a specific file based on extension
@@ -133,10 +136,9 @@ function getCommentMarkersForFile(filePath) {
   // ensure consistency by making it lowercase if it isnt
   const ext = filePath.split('.').pop().toLowerCase();
   // retrieve all markers for the matching index comment_markers['.js'] or default to common markers if undefined (if we dont have that filetype listed)
-  return COMMENT_MARKERS[ext] || ['#', '//', '--', '%', ';']; 
+  return LINE_COMMENT_MARKERS[ext] ?? DEFAULT_LINE_MARKERS;
 }
 
 module.exports = {
-  COMMENT_MARKERS,
   getCommentMarkersForFile,
 };
