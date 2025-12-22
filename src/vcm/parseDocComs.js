@@ -15,14 +15,6 @@ function parseDocComs(text, filePath) {
 
   // Get comment markers for this file type from our centralized config list
   const commentMarkers = getCommentMarkersForFile(filePath);
-
-  // Build regex pattern for this file type
-  // .replace() escapes special regex characters like *, ?, (, ), etc., because // or % would otherwise break the regex engine.
-  // .join('|') means “match any of these markers.”
-  // Example:
-  // If commentMarkers = ["//", "#"],
-  // then markerPattern = "\\/\\/|#" — usable inside new RegExp().
-  const markerPattern = commentMarkers.map(m => m.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
   
   // Helper: Check if a line is a comment or code
   const isComment = (l) => {
@@ -42,7 +34,7 @@ function parseDocComs(text, filePath) {
         return j; // return code lines index
       }
     }
-    return -1; // if none found, return to last line of code's index we found.
+    return -1; // no code line was found after this point (end of file). So that nextHash becomes null instead of blowing up
   };
 
   // Helper: Find the previous non-blank code line before index i
@@ -84,15 +76,9 @@ function parseDocComs(text, filePath) {
       // Skip blank lines that are before any comments (they're just file spacing)
       continue;
     }
+    const commentStartIndex = findInlineCommentStart(line, commentMarkers, { requireWhitespaceBefore: true });
 
-    // CASE 2: This line is code - check for inline comment(s)
-    // Find the first comment marker preceded by white space and extract everything after it as ONE combined comment
-    // (\\s+) → one or more whitespace characters
-    let inlineRegex = new RegExp(`(\\s+)(${markerPattern})`, "");
-    let match = line.match(inlineRegex);
-
-    if (match) {
-      const commentStartIndex = match.index; // tells where the comment begins.
+    if (commentStartIndex >= 0) {
       const fullComment = line.substring(commentStartIndex); // extract from that point to the end → the whole inline comment.
 
       // Context line hashes that are before and after
@@ -129,7 +115,7 @@ function parseDocComs(text, filePath) {
 
       const blockComment = {
         type: "block",
-        anchor: hashLine(line, 0), // Just content hash
+        anchor: hashLine(line.trimEnd(), 0), // Just content hash
         prevHash: prevIdx >= 0 ? hashLine(lines[prevIdx], 0) : null,
         nextHash: nextIdx >= 0 ? hashLine(lines[nextIdx], 0) : null,
         insertAbove: true, // when re-adding comments, they should appear above that line.
@@ -155,14 +141,14 @@ function parseDocComs(text, filePath) {
 
     const headerComment = {
       type: "block",
-      anchor: hashLine(lines[anchorLine] || "", 0), // Just content hash
+      anchor: hashLine((lines[anchorLine]).trimEnd() || "", 0), // Just content hash
       prevHash: null, // No previous code line before file header
       nextHash: nextIdx >= 0 ? hashLine(lines[nextIdx], 0) : null,
       insertAbove: true,
       block: commentBuffer,
     };
 
-      headerComment.anchorText = lines[anchorLine] || "";
+      headerComment.anchorText = (lines[anchorLine]).trimEnd() || "";
 
     // Insert this block at the beginning of the comments array
     comments.unshift(headerComment);
@@ -171,6 +157,49 @@ function parseDocComs(text, filePath) {
   return comments;
 }
 
+function findInlineCommentStart(line, commentMarkers, { requireWhitespaceBefore = true } = {}) {
+  let inString = false;
+  let stringChar = null;
+  let escaped = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+
+    if (escaped) { escaped = false; continue; }
+    if (char === "\\") { escaped = true; continue; }
+
+    // Enter string
+    if (!inString && (char === '"' || char === "'" || char === "`")) {
+      inString = true;
+      stringChar = char;
+      continue;
+    }
+
+    // Exit string
+    if (inString && char === stringChar) {
+      inString = false;
+      stringChar = null;
+      continue;
+    }
+
+    if (inString) continue;
+
+    // Outside strings: detect markers
+    for (const marker of commentMarkers) {
+      // does the marker occur starting at i?
+      if (line.startsWith(marker, i)) {
+        if (!requireWhitespaceBefore) return i;
+
+        // require whitespace immediately before marker
+        if (i > 0 && /\s/.test(line[i - 1])) return i - 1;
+      }
+    }
+  }
+
+  return -1;
+}
+
 module.exports = {
   parseDocComs,
+  findInlineCommentStart
 };

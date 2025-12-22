@@ -6,10 +6,7 @@ function buildContextKey(comment) {
   // comment.type separates logic for inline vs block comments.
   // comment.anchor is the hash of the code line the comment is attached to.
   // prev and next hash pinpoint any comments with identical anchors
-  return `${comment.type}: 
-          ${comment.anchor}:
-          ${comment.prevHash || "null"}:
-          ${comment.nextHash || "null"}`;
+  return `${comment.type}:${comment.anchor}:${comment.prevHash || "null"}:${comment.nextHash || "null"}`;
 }
 
 module.exports = {

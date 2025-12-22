@@ -20,6 +20,9 @@ const { setupSplitViewWatchers, updateSplitViewIfOpen, closeSplitView } = requir
 const { readBothVCMs } = require("./src/vcm/readBothVCMs");
 const { vcmFileExists } = require("./src/vcm/vcmFileExists");
 const { createVCMFiles } = require("./src/vcm/createVCMFiles");
+const { findInlineCommentStart } = require("./src/vcm/parseDocComs");
+const { updateAlwaysShow } = require("./src/alwaysShow");
+const { mergeSharedTextCleanMode } = require("./src/mergeTextCleanMode");
 
 // Global state variables for the extension
 let vcmEditor;           // Reference to the VCM split view editor
@@ -55,6 +58,104 @@ const buildTag = (() => {
   const iso = new Date().toISOString().slice(0, 16); // YYYY-MM-DDTHH:MM
   return iso.replace("T", "-");
 })();
+// Cache: per document URI string -> { version, index }
+// Cache: per document URI string -> { version, index }
+const _commentJumpIndexCache = new Map();
+
+/**
+ * Build jump indexes from already-parsed comments.
+ * parseDocComs is the single source of truth for comment parsing.
+ *
+ * Returns:
+ * - lineToComment: Map<lineNumber, commentObject> - O(1) click detection
+ * - keyToLines: Map<contextKey, number[]> - where each comment exists by full context
+ * - anchorToLines: Map<anchorHash, number[]> - where each anchor exists (fallback for clean mode)
+ */
+function buildCommentJumpIndex(parsedComments, docText, sourceFilePathForMarkers) {
+  const lineToComment = new Map();
+  const keyToLines = new Map();
+  const anchorToLines = new Map();
+
+  // -------------------------
+  // 1) Index comments by line and context key
+  // -------------------------
+  for (const c of parsedComments) {
+    const key = buildContextKey(c);
+
+    // Track which doc lines are "inside a comment" for O(1) click detection
+    if (c.type === "inline") {
+      lineToComment.set(c.commentedLineIndex, c);
+    } else if (c.type === "block" && Array.isArray(c.block)) {
+      for (const b of c.block) {
+        lineToComment.set(b.commentedLineIndex, c);
+      }
+    }
+
+    // Track where this comment exists by its full context key
+    const firstLine =
+      c.type === "inline"
+        ? c.commentedLineIndex
+        : Array.isArray(c.block) && c.block.length > 0
+        ? c.block[0].commentedLineIndex
+        : null;
+
+    if (typeof firstLine === "number") {
+      if (!keyToLines.has(key)) keyToLines.set(key, []);
+      keyToLines.get(key).push(firstLine);
+    }
+  }
+
+  // -------------------------
+  // 2) Index anchors by scanning the document with parseDocComs logic
+  //    This is needed for fallback when clicking comments in a file
+  //    and jumping to clean mode where comments don't exist
+  // -------------------------
+  const lines = docText.split("\n");
+  const commentMarkers = getCommentMarkersForFile(sourceFilePathForMarkers);
+
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    if (!raw.trim()) continue;
+
+    // Use parseDocComs' exact logic to calculate anchor hashes
+    const commentStart = findInlineCommentStart(raw, commentMarkers, { requireWhitespaceBefore: true });
+
+    if (commentStart >= 0) {
+      // This line has an inline comment - hash the code portion only
+      const codeOnly = raw.substring(0, commentStart).trimEnd();
+      if (codeOnly) {
+        const codeHash = hashLine(codeOnly, 0);
+        if (!anchorToLines.has(codeHash)) anchorToLines.set(codeHash, []);
+        anchorToLines.get(codeHash).push(i);
+      }
+    } else {
+      // No inline comment - hash the full line (for block comment anchors)
+      const fullHash = hashLine(raw.trimEnd(), 0);
+      if (!anchorToLines.has(fullHash)) anchorToLines.set(fullHash, []);
+      anchorToLines.get(fullHash).push(i);
+    }
+  }
+
+  return { lineToComment, keyToLines, anchorToLines };
+}
+
+function getCommentJumpIndexForDoc(doc, sourceFilePathForMarkers) {
+  const cacheKey = doc.uri.toString();
+  const cached = _commentJumpIndexCache.get(cacheKey);
+
+  // Same doc version = same text snapshot in VS Code -> safe cache hit
+  if (cached && cached.version === doc.version) {
+    return cached.index;
+  }
+
+  const text = doc.getText();
+  const parsed = parseDocComs(text, sourceFilePathForMarkers);
+  const index = buildCommentJumpIndex(parsed, text, sourceFilePathForMarkers);
+
+  _commentJumpIndexCache.set(cacheKey, { version: doc.version, index });
+  return index;
+}
+
 
 async function activate(context) {
   console.log("VCM ACTIVATE", {
@@ -105,11 +206,9 @@ async function activate(context) {
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider("vcm-view", provider)
   );
-  const { updateAlwaysShow } = require("./src/alwaysShow");
+  
   // TODO: might need to move this lower in the file but seems to be working fine rn
   const deps = { readBothVCMs: (relativePath) => readBothVCMs(relativePath, vcmDir), parseDocComs, hashLine };
-
-  const { mergeSharedTextCleanMode } = require("./src/mergeTextCleanMode");
 
   // ---------------------------------------------------------------------------
   // Update context for menu items based on cursor position
@@ -334,7 +433,8 @@ async function activate(context) {
     getSplitViewState,
     (relativePath) => readBothVCMs(relativePath, vcmDir),
     detectInitialMode,
-    detectPrivateVisibility
+    detectPrivateVisibility,
+    _commentJumpIndexCache
   );
 
   // ---------------------------------------------------------------------------
@@ -1137,9 +1237,6 @@ async function activate(context) {
   // ---------------------------------------------------------------------------
   // COMMAND: Split view with/without comments
   // ---------------------------------------------------------------------------
-  // Opens a split view with source on left and clean/commented version on right
-  // Currently configured: source (with comments) -> right pane (without comments)
-  // TODO: Make this configurable to show comments on right instead
   
   const toggleSplitView = vscode.commands.registerCommand("vcm-view-comments-mirror.toggleSplitViewComments", async () => {
     const editor = vscode.window.activeTextEditor;
@@ -1149,7 +1246,7 @@ async function activate(context) {
 
     // Close any existing VCM split view before opening a new one (only one VCM_ allowed)
     if (tempUri) {
-      await closeSplitView(getSplitViewState);
+      await closeSplitView(getSplitViewState, _commentJumpIndexCache);
     }
 
     const relativePath = vscode.workspace.asRelativePath(doc.uri);
@@ -1237,23 +1334,92 @@ async function activate(context) {
       // Direction 1: Source → Split View
       if (e.textEditor === sourceEditor) {
         const cursorPos = e.selections[0].active;
-        const wordRange = sourceEditor.document.getWordRangeAtPosition(cursorPos);
-        if (!wordRange) return;
+        const clickedLineNumber = cursorPos.line;
 
-        const word = sourceEditor.document.getText(wordRange);
-        if (!word || word.length < 2) return;
+        // Build (cached) indexes for both docs.
+        // Always use *source file path* for comment marker detection.
+        const sourceIndex = getCommentJumpIndexForDoc(sourceEditor.document, doc.uri.path);
+        const splitIndex  = getCommentJumpIndexForDoc(vcmEditor.document, doc.uri.path);
 
-        // Extract line context to improve matching accuracy
-        const sourceLine = sourceEditor.document.lineAt(cursorPos.line).text.trim();
-        const targetText = vcmEditor.document.getText();
-        const targetLines = targetText.split("\n");
+        // Check if click was on a comment line (O(1)).
+        const clickedComment = sourceIndex.lineToComment.get(clickedLineNumber);
 
-        // Try to find the same line context first (exact match or partial)
-        let targetLine = targetLines.findIndex(line => line.trim() === sourceLine.trim());
-        if (targetLine === -1) {
-          // fallback: find first line containing the word as whole word
-          const wordRegex = new RegExp(`\\b${word}\\b`);
-          targetLine = targetLines.findIndex(line => wordRegex.test(line));
+        let targetLine = -1;
+
+        if (clickedComment) {
+          // Comment click: jump to the SAME comment in the split view via contextKey (O(1)).
+          const key = buildContextKey(clickedComment);
+
+          // Where does this comment exist in the split view?
+          const matchLines = splitIndex.keyToLines.get(key);
+
+          if (matchLines && matchLines.length > 0) {
+            // If multiple matches, pick the closest one to the clicked line for better UX
+            if (matchLines.length === 1) {
+              targetLine = matchLines[0];
+            } else {
+              // Pick closest match by line distance
+              targetLine = matchLines.reduce((closest, line) => {
+                const closestDist = Math.abs(closest - clickedLineNumber);
+                const lineDist = Math.abs(line - clickedLineNumber);
+                return lineDist < closestDist ? line : closest;
+              });
+            }
+          } else {
+            // FALLBACK: comment doesn't exist in the split doc (because it's clean).
+            // Jump to its anchor (code) instead.
+            const anchorLines = splitIndex.anchorToLines.get(clickedComment.anchor);
+
+            if (!anchorLines || anchorLines.length === 0) {
+              return; // no safe jump target
+            }
+
+            if (anchorLines.length === 1) {
+              targetLine = anchorLines[0];
+            } else {
+              // Multiple lines have the same anchor - use context hashes to disambiguate
+              const splitLines = vcmEditor.document.getText().split("\n");
+
+              targetLine = anchorLines.find(lineIdx => {
+                // Check if prev/next lines match the comment's context
+                const prevLine = lineIdx > 0 ? splitLines[lineIdx - 1] : null;
+                const nextLine = lineIdx < splitLines.length - 1 ? splitLines[lineIdx + 1] : null;
+
+                const prevMatches = clickedComment.prevHash === null ||
+                  (prevLine && hashLine(prevLine, 0) === clickedComment.prevHash);
+                const nextMatches = clickedComment.nextHash === null ||
+                  (nextLine && hashLine(nextLine, 0) === clickedComment.nextHash);
+
+                return prevMatches && nextMatches;
+              });
+
+              // If context matching fails, fall back to proximity
+              if (targetLine === undefined) {
+                targetLine = anchorLines.reduce((closest, line) => {
+                  const closestDist = Math.abs(closest - clickedLineNumber);
+                  const lineDist = Math.abs(line - clickedLineNumber);
+                  return lineDist < closestDist ? line : closest;
+                });
+              }
+            }
+          }
+        } else {
+          // Code click: keep your existing word/line heuristics.
+          const wordRange = sourceEditor.document.getWordRangeAtPosition(cursorPos);
+          if (!wordRange) return;
+
+          const word = sourceEditor.document.getText(wordRange);
+          if (!word || word.length < 2) return;
+
+          const sourceLine = sourceEditor.document.lineAt(cursorPos.line).text.trim();
+          const targetText = vcmEditor.document.getText();
+          const targetLines = targetText.split("\n");
+
+          targetLine = targetLines.findIndex(line => line.trim() === sourceLine.trim());
+          if (targetLine === -1) {
+            const wordRegex = new RegExp(`\\b${word}\\b`);
+            targetLine = targetLines.findIndex(line => wordRegex.test(line));
+          }
         }
 
         if (targetLine === -1) return;
@@ -1265,13 +1431,11 @@ async function activate(context) {
           new vscode.Range(targetPos, targetPos),
           vscode.TextEditorRevealType.InCenter
         );
-
         // Remove previous highlight if exists
         if (activeHighlight) {
           activeHighlight.dispose();
           activeHighlight = null;
         }
-
         // Create a highlight using the editor's built-in selection color
         activeHighlight = vscode.window.createTextEditorDecorationType({
           backgroundColor: new vscode.ThemeColor("editor.selectionBackground"),
@@ -1286,23 +1450,89 @@ async function activate(context) {
       // Direction 2: Split View → Source
       else if (e.textEditor === vcmEditor) {
         const cursorPos = e.selections[0].active;
-        const wordRange = vcmEditor.document.getWordRangeAtPosition(cursorPos);
-        if (!wordRange) return;
+        const clickedLineNumber = cursorPos.line;
 
-        const word = vcmEditor.document.getText(wordRange);
-        if (!word || word.length < 2) return;
+        // Cached indexes
+        const sourceIndex = getCommentJumpIndexForDoc(sourceEditor.document, doc.uri.path);
+        const splitIndex  = getCommentJumpIndexForDoc(vcmEditor.document, doc.uri.path);
 
-        // Extract line context to improve matching accuracy
-        const splitLine = vcmEditor.document.lineAt(cursorPos.line).text.trim();
-        const sourceText = sourceEditor.document.getText();
-        const sourceLines = sourceText.split("\n");
+        // Did we click on a comment line in the split view?
+        const clickedComment = splitIndex.lineToComment.get(clickedLineNumber);
 
-        // Try to find the same line context first (exact match or partial)
-        let sourceLine = sourceLines.findIndex(line => line.trim() === splitLine.trim());
-        if (sourceLine === -1) {
-          // fallback: find first line containing the word as whole word
-          const wordRegex = new RegExp(`\\b${word}\\b`);
-          sourceLine = sourceLines.findIndex(line => wordRegex.test(line));
+        let sourceLine = -1;
+
+        if (clickedComment) {
+          // Comment click: jump to same comment in source via contextKey (O(1))
+          const key = buildContextKey(clickedComment);
+          const matchLines = sourceIndex.keyToLines.get(key);
+
+          if (matchLines && matchLines.length > 0) {
+            // If multiple matches, pick the closest one for better UX
+            if (matchLines.length === 1) {
+              sourceLine = matchLines[0];
+            } else {
+              // Pick closest match by line distance
+              sourceLine = matchLines.reduce((closest, line) => {
+                const closestDist = Math.abs(closest - clickedLineNumber);
+                const lineDist = Math.abs(line - clickedLineNumber);
+                return lineDist < closestDist ? line : closest;
+              });
+            }
+          } else {
+            // FALLBACK: comment doesn't exist in source (because it's clean).
+            // Jump to its anchor (code) instead.
+            const anchorLines = sourceIndex.anchorToLines.get(clickedComment.anchor);
+
+            if (!anchorLines || anchorLines.length === 0) {
+              return; // no safe jump target
+            }
+
+            if (anchorLines.length === 1) {
+              sourceLine = anchorLines[0];
+            } else {
+              // Multiple lines have the same anchor - use context hashes to disambiguate
+              const sourceLines = sourceEditor.document.getText().split("\n");
+
+              sourceLine = anchorLines.find(lineIdx => {
+                // Check if prev/next lines match the comment's context
+                const prevLine = lineIdx > 0 ? sourceLines[lineIdx - 1] : null;
+                const nextLine = lineIdx < sourceLines.length - 1 ? sourceLines[lineIdx + 1] : null;
+
+                const prevMatches = clickedComment.prevHash === null ||
+                  (prevLine && hashLine(prevLine, 0) === clickedComment.prevHash);
+                const nextMatches = clickedComment.nextHash === null ||
+                  (nextLine && hashLine(nextLine, 0) === clickedComment.nextHash);
+
+                return prevMatches && nextMatches;
+              });
+
+              // If context matching fails, fall back to proximity
+              if (sourceLine === undefined) {
+                sourceLine = anchorLines.reduce((closest, line) => {
+                  const closestDist = Math.abs(closest - clickedLineNumber);
+                  const lineDist = Math.abs(line - clickedLineNumber);
+                  return lineDist < closestDist ? line : closest;
+                });
+              }
+            }
+          }
+        } else {
+          // Code click: keep your existing heuristic
+          const wordRange = vcmEditor.document.getWordRangeAtPosition(cursorPos);
+          if (!wordRange) return;
+
+          const word = vcmEditor.document.getText(wordRange);
+          if (!word || word.length < 2) return;
+          // Extract line context to improve matching accuracy
+          const splitLine = vcmEditor.document.lineAt(cursorPos.line).text.trim();
+          const sourceText = sourceEditor.document.getText();
+          const sourceLines = sourceText.split("\n");
+
+          sourceLine = sourceLines.findIndex(line => line.trim() === splitLine.trim());
+          if (sourceLine === -1) {
+            const wordRegex = new RegExp(`\\b${word}\\b`);
+            sourceLine = sourceLines.findIndex(line => wordRegex.test(line));
+          }
         }
 
         if (sourceLine === -1) return;

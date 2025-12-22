@@ -38,11 +38,16 @@ async function generateCommentedSplitView(text, filePath, relativePath, includeP
 // ---------------------------------------------------------------------------
 // Helper function to close split view tab and clean up
 // ---------------------------------------------------------------------------
-async function closeSplitView(getSplitViewState) {
+async function closeSplitView(getSplitViewState, commentJumpIndexCache = null) {
   const { tempUri, setSplitViewState } = getSplitViewState();
 
   if (tempUri) {
     try {
+      // Clean up cache entry to prevent memory leak
+      if (commentJumpIndexCache) {
+        commentJumpIndexCache.delete(tempUri.toString());
+      }
+
       // Find the specific VCM tab and close only that tab (not the whole pane)
       const allTabs = vscode.window.tabGroups.all.flatMap(group => group.tabs);
       const vcmTab = allTabs.find(tab => {
@@ -72,7 +77,7 @@ async function closeSplitView(getSplitViewState) {
 // ---------------------------------------------------------------------------
 // Setup split view watchers
 // ---------------------------------------------------------------------------
-function setupSplitViewWatchers(context, provider, getSplitViewState, readBothVCMs, detectInitialMode, detectPrivateVisibility) {
+function setupSplitViewWatchers(context, provider, getSplitViewState, readBothVCMs, detectInitialMode, detectPrivateVisibility, commentJumpIndexCache = null) {
   const { stripComments } = require("../injectExtractComments");
 
   // Split view live sync: update the VCM split view when source file changes
@@ -169,7 +174,7 @@ function setupSplitViewWatchers(context, provider, getSplitViewState, readBothVC
       });
     } else if (sourceDocUri && doc.uri.toString() === sourceDocUri.toString()) {
       // Source document was closed - close the split view too
-      closeSplitView(getSplitViewState);
+      closeSplitView(getSplitViewState, commentJumpIndexCache);
     }
   });
   context.subscriptions.push(closeWatcher);
@@ -183,7 +188,7 @@ function setupSplitViewWatchers(context, provider, getSplitViewState, readBothVC
       const sourceVisible = editors.some(e => e.document.uri.toString() === sourceDocUri.toString());
       if (!sourceVisible) {
         // Source is no longer visible - close the split view
-        closeSplitView(getSplitViewState);
+        closeSplitView(getSplitViewState, commentJumpIndexCache);
       }
     }
   });
