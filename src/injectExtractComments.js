@@ -1,7 +1,8 @@
 const { getCommentMarkersForFile } = require("./commentMarkers");
 const { hashLine } = require("./hash");
-const { isolateCodeLine } = require("./lineUtils");
+const { isolateCodeLine, findInlineCommentStart } = require("./lineUtils");
 const { parseDocComs } = require("./vcm/parseDocComs");
+const { commentMarkers } = require("./commentMarkers");
 
 // -----------------------------------------------------------------------------
 // Comment Injection
@@ -267,66 +268,6 @@ function stripComments(text, filePath, vcmComments = [], keepPrivate = false, is
   const markerPattern = commentMarkers.map(m => m.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
   const lineStartPattern = new RegExp(`^(${markerPattern})`);
 
-  // Helper: Find the position of an inline comment, accounting for strings
-  const findCommentStart = (line) => {
-    let inString = false;
-    let stringChar = null;
-    let escaped = false;
-
-    for (let i = 0; i < line.length; i++) {
-      const char = line[i];
-      const nextChar = line[i + 1];
-
-      // Handle escape sequences
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (char === '\\') {
-        escaped = true;
-        continue;
-      }
-
-      // Track string state (single, double, or backtick quotes)
-      if (!inString && (char === '"' || char === "'" || char === '`')) {
-        inString = true;
-        stringChar = char;
-        continue;
-      }
-      if (inString && char === stringChar) {
-        inString = false;
-        stringChar = null;
-        continue;
-      }
-
-      // Only look for comment markers outside of strings
-      if (!inString) {
-        // Check each marker for this language
-        for (const marker of commentMarkers) {
-          if (marker.length === 2) {
-            // Two-character markers like //, --, etc.
-            if (char === marker[0] && nextChar === marker[1]) {
-              // Make sure there's whitespace before it (not part of code)
-              if (i > 0 && line[i - 1].match(/\s/)) {
-                return i - 1; // Include the whitespace
-              }
-            }
-          } else {
-            // Single-character markers like #, %, ;
-            if (char === marker) {
-              // Make sure there's whitespace before it
-              if (i > 0 && line[i - 1].match(/\s/)) {
-                return i - 1;
-              }
-            }
-          }
-        }
-      }
-    }
-
-    return -1; // No comment found
-  };
-
   // Build sets of comment context keys that should be kept
   // Use buildContextKey() instead of anchor to avoid "ghost marking" siblings
   const { buildContextKey } = require("./buildContextKey");
@@ -426,7 +367,7 @@ function stripComments(text, filePath, vcmComments = [], keepPrivate = false, is
       filteredLines.push(line);
     } else {
       // Remove inline comments: everything after comment marker (if not in string)
-      const commentPos = findCommentStart(line);
+      const commentPos = findInlineCommentStart(line, commentMarkers, { requireWhitespaceBefore: true });
       if (commentPos >= 0) {
         filteredLines.push(line.substring(0, commentPos).trimEnd());
       } else {
