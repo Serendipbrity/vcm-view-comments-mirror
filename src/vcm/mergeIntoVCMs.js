@@ -157,7 +157,7 @@ function mergeIntoVCMs({
         return {
           ...current,
           alwaysShow: existing.alwaysShow || undefined,
-          isPrivate: isPrivateMode || undefined,
+          isPrivate: isPrivateMode ? true : undefined,
           // anchor, prevHash, nextHash, commentedLineIndex, anchorText all come from current (updated position)
           // Preserve any other metadata fields here
         };
@@ -171,7 +171,7 @@ function mergeIntoVCMs({
           return {
             ...current,
             alwaysShow: existing.alwaysShow || undefined,
-            isPrivate: isPrivateMode || undefined,
+            isPrivate: isPrivateMode ? true : undefined,
             // anchor, prevHash, nextHash, commentedLineIndex, anchorText all come from current (updated position)
           };
         }
@@ -222,16 +222,16 @@ function mergeIntoVCMs({
       // PRIVATE MODE IN CLEAN: Update anchors and content (same as shared)
       // ====================================================================
 
-      // Build map by text for matching
-      // const vcmComByTEXT = new Map();
-      // for (const existing of vcmComments) {
-      //   const textKey =
-      //     existing.text ||
-      //     (existing.block ? existing.block.map((b) => b.text).join("\n") : "");
-      //   if (textKey && !vcmComByTEXT.has(textKey)) {
-      //     vcmComByTEXT.set(textKey, existing);
-      //   }
-      // }
+      // Build map by text for matching (handles cut/paste where anchor changes)
+      const vcmComByTEXT = new Map();
+      for (const existing of vcmComments) {
+        const textKey =
+          existing.text ||
+          (existing.block ? existing.block.map((b) => b.text).join("\n") : "");
+        if (textKey && !vcmComByTEXT.has(textKey)) {
+          vcmComByTEXT.set(textKey, existing);
+        }
+      }
 
       // Track which existing comments we've matched
       const matchedVCMComments = new Set();
@@ -239,18 +239,30 @@ function mergeIntoVCMs({
       // Process current comments (typed in clean mode or commented mode)
       for (const current of docComments) {
         const key = buildContextKey(current);
+        const currentText =
+          current.text ||
+          (current.block ? current.block.map((b) => b.text).join("\n") : "");
 
         // Skip if this comment belongs to the "other" VCM (shared)
         if (otherKeys.has(key)) {
           continue;
         }
 
-        // Try to match by anchor (for existing private VCM comments)
+        // Try to match by anchor first (for existing private VCM comments)
         let existing = null;
         const candidates = vcmComByKEY.get(key) || [];
         if (candidates.length > 0 && !matchedVCMComments.has(candidates[0])) {
           existing = candidates[0];
           matchedVCMComments.add(existing);
+        }
+
+        // If no anchor match, try matching by text (handles cut/paste)
+        if (!existing && currentText && vcmComByTEXT.has(currentText)) {
+          const candidate = vcmComByTEXT.get(currentText);
+          if (!matchedVCMComments.has(candidate)) {
+            existing = candidate;
+            matchedVCMComments.add(existing);
+          }
         }
 
         if (existing) {
@@ -264,15 +276,23 @@ function mergeIntoVCMs({
           existing.nextHash = current.nextHash;
           existing.commentedLineIndex = current.commentedLineIndex;
           existing.anchorText = current.anchorText;
-        } else {
-          // No match - this is a new private comment
-          vcmComments.push(current);
-          matchedVCMComments.add(current);
+          // Ensure isPrivate flag is preserved/set
+          existing.isPrivate = true;
         }
+        // Note: If no match, don't add to vcmComments
+        // Private VCM only contains explicitly marked private comments
+        // New comments go to shared VCM by default
       }
 
-      // Filter out duplicates - only keep matched comments
-      finalComments = vcmComments.filter(c => matchedVCMComments.has(c));
+      // IMPORTANT: Keep ALL existing private VCM comments, even if not visible/matched
+      // This ensures hidden private comments persist when private toggle is OFF
+      finalComments = vcmComments.map(c => {
+        // Ensure all private VCM comments keep their isPrivate flag
+        if (c.isPrivate !== true) {
+          c.isPrivate = true;
+        }
+        return c;
+      });
     } else {
       // ====================================================================
       // SHARED MODE IN CLEAN: Track changes via text_cleanMode

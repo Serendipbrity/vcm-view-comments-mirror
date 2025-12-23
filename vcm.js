@@ -340,8 +340,8 @@ async function activate(context) {
       let finalPrivate = mergeIntoVCMs({
         isCommented,
         docComments,
-        vcmComments: privateVCMComments, // private store
-        otherVCMComments: [],            // IMPORTANT: no shared
+        vcmComments: privateVCMComments,   // private store
+        otherVCMComments: sharedVCMComments, // exclusion: don't steal shared comments
         isPrivateMode: true,
         wasJustInjected,
       });

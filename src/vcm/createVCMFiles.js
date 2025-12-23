@@ -99,7 +99,7 @@ async function writeSharedVCM(relativePath, comments, vcmSharedDir) {
 
 /**
  * Write only private.
- * Caller passes the combined comments array; this function filters and strips isPrivate.
+ * Caller passes the combined comments array; this function filters but KEEPS isPrivate.
  */
 async function writePrivateVCM(relativePath, comments, vcmPrivateDir) {
   const privateComments = (comments || []).filter((c) => c.isPrivate);
@@ -108,7 +108,7 @@ async function writePrivateVCM(relativePath, comments, vcmPrivateDir) {
     relativePath,
     dirUri: vcmPrivateDir,
     comments: privateComments,
-    stripIsPrivate: true, // private canonical store has no isPrivate flag
+    stripIsPrivate: false, // Keep isPrivate flag in private VCM for persistence
   });
 }
 
