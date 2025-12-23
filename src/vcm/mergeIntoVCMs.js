@@ -146,7 +146,7 @@ function mergeIntoVCMs({
       // Not from other VCM - check this VCM's existing comments for metadata
       const candidates = vcmComByKEY.get(key) || [];
       if (candidates.length > 0) {
-        // Found match by anchor - preserve metadata
+        // Found match by anchor - update content and position fields (code may have moved)
         const existing = candidates[0];
         matchedVCMComments.add(existing);
         candidates.shift();
@@ -157,6 +157,8 @@ function mergeIntoVCMs({
         return {
           ...current,
           alwaysShow: existing.alwaysShow || undefined,
+          isPrivate: isPrivateMode || undefined,
+          // anchor, prevHash, nextHash, commentedLineIndex, anchorText all come from current (updated position)
           // Preserve any other metadata fields here
         };
       }
@@ -169,6 +171,8 @@ function mergeIntoVCMs({
           return {
             ...current,
             alwaysShow: existing.alwaysShow || undefined,
+            isPrivate: isPrivateMode || undefined,
+            // anchor, prevHash, nextHash, commentedLineIndex, anchorText all come from current (updated position)
           };
         }
       }
@@ -348,24 +352,44 @@ function mergeIntoVCMs({
         }
 
         if (existing) {
-          // Update text_cleanMode
-          if (current.type === "inline") {
-            if (current.text !== existing.text) {
-              existing.text_cleanMode = current.text;
-            } else {
-              existing.text_cleanMode = null;
-            }
-          } else if (current.type === "block") {
-            const existingTexts =
-              existing.block?.map((b) => b.text).join("\n") || "";
-            const currentTexts =
-              current.block?.map((b) => b.text).join("\n") || "";
-            const blocksIdentical = existingTexts === currentTexts;
+          // Special handling for alwaysShow comments: update text/block directly (like commented mode)
+          if (existing.alwaysShow) {
+            // Update content directly (no text_cleanMode for alwaysShow)
+            existing.text = current.text;
+            existing.block = current.block;
+            // Update anchor in case code moved
+            existing.anchor = current.anchor;
+            existing.prevHash = current.prevHash;
+            existing.nextHash = current.nextHash;
+            existing.commentedLineIndex = current.commentedLineIndex;
+            existing.anchorText = current.anchorText;
+          } else {
+            // Regular comments: use text_cleanMode
+            // But ALWAYS update anchor/position fields (code may have moved)
+            existing.anchor = current.anchor;
+            existing.prevHash = current.prevHash;
+            existing.nextHash = current.nextHash;
+            existing.commentedLineIndex = current.commentedLineIndex;
+            existing.anchorText = current.anchorText;
 
-            if (!blocksIdentical) {
-              existing.text_cleanMode = current.block;
-            } else {
-              existing.text_cleanMode = null;
+            if (current.type === "inline") {
+              if (current.text !== existing.text) {
+                existing.text_cleanMode = current.text;
+              } else {
+                existing.text_cleanMode = null;
+              }
+            } else if (current.type === "block") {
+              const existingTexts =
+                existing.block?.map((b) => b.text).join("\n") || "";
+              const currentTexts =
+                current.block?.map((b) => b.text).join("\n") || "";
+              const blocksIdentical = existingTexts === currentTexts;
+
+              if (!blocksIdentical) {
+                existing.text_cleanMode = current.block;
+              } else {
+                existing.text_cleanMode = null;
+              }
             }
           }
         } else {

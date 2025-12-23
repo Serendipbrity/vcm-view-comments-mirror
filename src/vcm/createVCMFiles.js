@@ -13,70 +13,116 @@ const { vcmFileExists } = require("./vcmFileExists");
 // - Creates VCM files if they don't exist
 // - Updates VCM files if they exist
 // ============================================================================
-async function createVCMFiles(relativePath, comments, vcmDir) {
-  const vcmPrivateDir = vscode.Uri.joinPath(vscode.Uri.joinPath(vcmDir, ".."), "private");
-    const sharedComments = comments.filter(c => !c.isPrivate);
-    const privateComments = comments.filter(c => c.isPrivate).map(c => {
-      const { isPrivate, ...rest } = c;
-      return rest; // Remove isPrivate flag when saving to private file
-    });
+// src/vcm/vcmIO.js
+// Keep writes consistent across shared/private, but let callers choose which to write.
 
-    // Save shared comments (only if there are shared comments or a shared VCM file already exists)
-    const sharedExists = await vcmFileExists(vcmDir, relativePath);
-    if (sharedComments.length > 0 || sharedExists) {
-      // Ensure the base .vcm/shared directory exists
-      await vscode.workspace.fs.createDirectory(vcmDir).catch(() => {});
+/**
+ * Ensures the directory for a file path exists:
+ * - baseDir/.vcm.json (and subdirs if relativePath has folders)
+ */
+async function ensureSubdirsExist(baseDir, relativePath) {
+  // Create the base dir (shared or private)
+  await vscode.workspace.fs.createDirectory(baseDir).catch(() => {});
 
-      const sharedFileUri = vscode.Uri.joinPath(vcmDir, relativePath + ".vcm.json");
-      const sharedData = {
-        file: relativePath,
-        lastModified: new Date().toISOString(),
-        comments: sharedComments,
-      };
+  // If relativePath has subfolders, create them inside baseDir
+  const pathParts = relativePath.split(/[\\/]/);
+  if (pathParts.length > 1) {
+    const subdir = vscode.Uri.joinPath(baseDir, pathParts.slice(0, -1).join("/"));
+    await vscode.workspace.fs.createDirectory(subdir).catch(() => {});
+  }
+}
 
-      // Ensure dir structure exists
-      const pathParts = relativePath.split(/[\\/]/);
-      if (pathParts.length > 1) {
-        const vcmSubdir = vscode.Uri.joinPath(vcmDir, pathParts.slice(0, -1).join("/"));
-        await vscode.workspace.fs.createDirectory(vcmSubdir).catch(() => {});
-      }
+/**
+ * Internal generic writer:
+ * - If comments.length > 0 OR file already exists -> write file
+ * - Else -> delete file
+ *
+ * `stripIsPrivate`:
+ * - shared storage CAN keep isPrivate=false (or omit; your choice)
+ * - private storage MUST NOT store isPrivate (canonical store)
+ */
+async function writeVCMFile({ relativePath, dirUri, comments, stripIsPrivate }) {
+  const fileUri = vscode.Uri.joinPath(dirUri, relativePath + ".vcm.json");
 
-      await vscode.workspace.fs.writeFile(
-        sharedFileUri,
-        Buffer.from(JSON.stringify(sharedData, null, 2), "utf8")
-      );
-    }
+  // "Exists" check uses your existing helper that checks in the right folder structure
+  const exists = await vcmFileExists(dirUri, relativePath);
 
-    // 4️⃣ Private VCM path + write or delete
-    const privateFileUri = vscode.Uri.joinPath(vcmPrivateDir, relativePath + ".vcm.json");
-    if (privateComments.length > 0) {
-      const privateData = {
-        file: relativePath,
-        lastModified: new Date().toISOString(),
-        comments: privateComments,
-      };
-
-      const pathParts = relativePath.split(/[\\/]/);
-      if (pathParts.length > 1) {
-        const vcmPrivateSubdir = vscode.Uri.joinPath(vcmPrivateDir, pathParts.slice(0, -1).join("/"));
-        await vscode.workspace.fs.createDirectory(vcmPrivateSubdir).catch(() => {});
-      }
-
-      await vscode.workspace.fs.writeFile(
-        privateFileUri,
-        Buffer.from(JSON.stringify(privateData, null, 2), "utf8")
-      );
-    } else {
-      // Delete private VCM file if no private comments
-      const privateFileUri = vscode.Uri.joinPath(vcmPrivateDir, relativePath + ".vcm.json");
-      try {
-        await vscode.workspace.fs.delete(privateFileUri);
-      } catch {
-        // Ignore non-existent file
-      }
-    }
+  // If no comments and no existing file -> do nothing
+  if ((!comments || comments.length === 0) && !exists) {
+    return;
   }
 
-  module.exports = {
-    createVCMFiles,
-  };
+  if (comments && comments.length > 0) {
+    await ensureSubdirsExist(dirUri, relativePath);
+
+    const normalized = stripIsPrivate
+      ? comments.map((c) => {
+          // Remove isPrivate flag for canonical private storage
+          const { isPrivate, ...rest } = c;
+          return rest;
+        })
+      : comments;
+
+    const payload = {
+      file: relativePath,
+      lastModified: new Date().toISOString(),
+      comments: normalized,
+    };
+
+    await vscode.workspace.fs.writeFile(
+      fileUri,
+      Buffer.from(JSON.stringify(payload, null, 2), "utf8")
+    );
+    return;
+  }
+
+  // comments empty but file exists -> delete
+  try {
+    await vscode.workspace.fs.delete(fileUri);
+  } catch {}
+}
+
+/**
+ * Write only shared.
+ * Caller passes the combined comments array; this function filters.
+ */
+async function writeSharedVCM(relativePath, comments, vcmSharedDir) {
+  const sharedComments = (comments || []).filter((c) => !c.isPrivate);
+
+  await writeVCMFile({
+    relativePath,
+    dirUri: vcmSharedDir,
+    comments: sharedComments,
+    stripIsPrivate: false, // shared can keep isPrivate if you want, but you already filter it out
+  });
+}
+
+/**
+ * Write only private.
+ * Caller passes the combined comments array; this function filters and strips isPrivate.
+ */
+async function writePrivateVCM(relativePath, comments, vcmPrivateDir) {
+  const privateComments = (comments || []).filter((c) => c.isPrivate);
+
+  await writeVCMFile({
+    relativePath,
+    dirUri: vcmPrivateDir,
+    comments: privateComments,
+    stripIsPrivate: true, // private canonical store has no isPrivate flag
+  });
+}
+
+/**
+ * Write both (thin wrapper).
+ * This is your old createVCMFiles behavior, but optional.
+ */
+async function writeBothVCMs(relativePath, comments, vcmSharedDir, vcmPrivateDir) {
+  await writeSharedVCM(relativePath, comments, vcmSharedDir);
+  await writePrivateVCM(relativePath, comments, vcmPrivateDir);
+}
+
+module.exports = {
+  writeSharedVCM,
+  writePrivateVCM,
+  writeBothVCMs,
+};
