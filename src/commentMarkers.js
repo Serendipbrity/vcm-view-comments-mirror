@@ -128,6 +128,30 @@ const LINE_COMMENT_MARKERS = {
   'rst': [],
 };
 
+// BLOCK comment markers (require start + end handling)
+const BLOCK_COMMENT_MARKERS = {
+  // Web / Frontend
+  'css': [{ start: '/*', end: '*/' }],
+  'scss': [{ start: '/*', end: '*/' }],
+  'less': [{ start: '/*', end: '*/' }],
+
+  'html': [{ start: '<!--', end: '-->' }],
+  'htm': [{ start: '<!--', end: '-->' }],
+  'xml': [{ start: '<!--', end: '-->' }],
+  'vue': [{ start: '<!--', end: '-->' }],
+  'svelte': [{ start: '<!--', end: '-->' }],
+
+  // Markdown (HTML comments only)
+  'md': [{ start: '<!--', end: '-->' }],
+  'markdown': [{ start: '<!--', end: '-->' }],
+  // Pascal (future)
+  'pas': [
+    { start: '{', end: '}' },
+    { start: '(*', end: '*)' },
+  ],
+};
+
+
 // Get comment markers for a specific file based on extension
 // Returns array of comment marker strings for the file type
 function getCommentMarkersForFile(filePath) {
