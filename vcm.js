@@ -359,20 +359,17 @@ async function activate(context) {
     // In commented mode: private comments are extracted and already in finalComments with isPrivate: true
     // In clean mode: private comments were processed separately and updated in place (text-based matching)
 
-    // Check which private comments are already in finalComments (using text+anchor+type as key)
-    // In commented mode: private comments were extracted and marked with isPrivate
-    // In clean mode: private comments were updated separately via text-based matching
-    const finalCommentsSet = new Set(finalComments.map(c => {
-      const text = c.text || (c.block ? c.block.map(b => b.text).join('\n') : '');
-      return `${c.type}:${c.anchor}:${text}`;
-    }));
+    // The private merge mutated existingPrivateComments in place AND filtered duplicates
+    // So existingPrivateComments now contains the deduplicated, updated private comments
+
+    // Check which private comments are already in finalComments (using context key, not text)
+    // This prevents duplicates when private comments are visible
+    const finalCommentsKeys = new Set(finalComments.map(c => buildContextKey(c)));
 
     // Add private comments that aren't already in finalComments
-    // (They might already be there if private comments were visible and got extracted)
     const missingPrivateComments = existingPrivateComments.filter(pc => {
-      const text = pc.text || (pc.block ? pc.block.map(b => b.text).join('\n') : '');
-      const key = `${pc.type}:${pc.anchor}:${text}`;
-      return !finalCommentsSet.has(key);
+      const key = buildContextKey(pc);
+      return !finalCommentsKeys.has(key);
     }).map(pc => ({ ...pc, isPrivate: true })); // Ensure isPrivate flag is set
 
     const finalCommentsWithPrivate = [...finalComments, ...missingPrivateComments];

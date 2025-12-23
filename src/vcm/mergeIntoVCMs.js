@@ -215,81 +215,60 @@ function mergeIntoVCMs({
 
     if (isPrivateMode) {
       // ====================================================================
-      // PRIVATE MODE IN CLEAN: Update anchors by matching text (like shared)
+      // PRIVATE MODE IN CLEAN: Update anchors and content (same as shared)
       // ====================================================================
 
       // Build map by text for matching
-      const vcmComByTEXT = new Map();
-      for (const existing of vcmComments) {
-        const textKey =
-          existing.text ||
-          (existing.block ? existing.block.map((b) => b.text).join("\n") : "");
-        if (textKey && !vcmComByTEXT.has(textKey)) {
-          vcmComByTEXT.set(textKey, existing);
-        }
-      }
+      // const vcmComByTEXT = new Map();
+      // for (const existing of vcmComments) {
+      //   const textKey =
+      //     existing.text ||
+      //     (existing.block ? existing.block.map((b) => b.text).join("\n") : "");
+      //   if (textKey && !vcmComByTEXT.has(textKey)) {
+      //     vcmComByTEXT.set(textKey, existing);
+      //   }
+      // }
 
       // Track which existing comments we've matched
       const matchedVCMComments = new Set();
 
-      // Process current comments
+      // Process current comments (typed in clean mode or commented mode)
       for (const current of docComments) {
         const key = buildContextKey(current);
-        const currentText =
-          current.text ||
-          (current.block ? current.block.map((b) => b.text).join("\n") : "");
 
         // Skip if this comment belongs to the "other" VCM (shared)
         if (otherKeys.has(key)) {
           continue;
         }
 
-        // Match by text first (handles when comment moves)
+        // Try to match by anchor (for existing private VCM comments)
         let existing = null;
-        if (currentText && vcmComByTEXT.has(currentText)) {
-          const candidate = vcmComByTEXT.get(currentText);
-          if (!matchedVCMComments.has(candidate)) {
-            existing = candidate;
-            matchedVCMComments.add(existing);
-            // Update anchor to new position
-            existing.anchor = current.anchor;
-            existing.prevHash = current.prevHash;
-            existing.nextHash = current.nextHash;
-            existing.commentedLineIndex = current.commentedLineIndex;
-            // Update content
-            existing.text = current.text;
-            existing.block = current.block;
-            // Update anchorText
-            if (current.anchorText !== undefined) {
-              existing.anchorText = current.anchorText;
-            }
-          }
+        const candidates = vcmComByKEY.get(key) || [];
+        if (candidates.length > 0 && !matchedVCMComments.has(candidates[0])) {
+          existing = candidates[0];
+          matchedVCMComments.add(existing);
         }
 
-        // If no text match, try anchor match
-        if (!existing) {
-          const candidates = vcmComByKEY.get(key) || [];
-          if (candidates.length > 0 && !matchedVCMComments.has(candidates[0])) {
-            existing = candidates[0];
-            matchedVCMComments.add(existing);
-            // Update content
-            existing.text = current.text;
-            existing.block = current.block;
-            if (current.anchorText !== undefined) {
-              existing.anchorText = current.anchorText;
-            }
-          }
-        }
-
-        // If still no match, add as new
-        if (!existing) {
+        if (existing) {
+          // Found existing private comment - update it in place
+          // Update content (may have been edited)
+          existing.text = current.text;
+          existing.block = current.block;
+          // Update anchor in case code moved
+          existing.anchor = current.anchor;
+          existing.prevHash = current.prevHash;
+          existing.nextHash = current.nextHash;
+          existing.commentedLineIndex = current.commentedLineIndex;
+          existing.anchorText = current.anchorText;
+        } else {
+          // No match - this is a new private comment
           vcmComments.push(current);
           matchedVCMComments.add(current);
         }
       }
 
-      // Return all existing comments (updated in place)
-      finalComments = vcmComments;
+      // Filter out duplicates - only keep matched comments
+      finalComments = vcmComments.filter(c => matchedVCMComments.has(c));
     } else {
       // ====================================================================
       // SHARED MODE IN CLEAN: Track changes via text_cleanMode
@@ -355,6 +334,7 @@ function mergeIntoVCMs({
             existing.anchor = current.anchor;
             existing.prevHash = current.prevHash;
             existing.nextHash = current.nextHash;
+            existing.anchorText = current.anchorText;
           }
         }
 
