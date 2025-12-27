@@ -525,27 +525,10 @@ async function activate(context) {
     } else {
       // Currently in clean mode -> switch to commented mode (show comments)
       try {
-        // Load shared comments
+        newText = await generateCommentedVersion(text, doc.uri.path, relativePath, readSharedVCM, vcmDir);
+
         const existingSharedComments = await readSharedVCM(relativePath, vcmDir);
-
-        // Merge text_cleanMode into text/block and clear text_cleanMode for shared comments
         const mergedSharedComments = mergeSharedTextCleanMode(existingSharedComments);
-
-        // Strip any comments typed in clean mode before injecting VCM comments
-        const cleanText = stripComments(text, doc.uri.path, mergedSharedComments);
-
-        // Inject shared comments
-        newText = injectComments(cleanText, doc.uri.path, mergedSharedComments);
-
-        // If private is ON, also inject private comments (preserving private visibility state)
-        const privateVisible = privateCommentsVisible.get(doc.uri.fsPath) === true;
-        if (privateVisible) {
-          const privateComments = await readPrivateVCM(relativePath, vcmPrivateDir);
-          // Only inject private comments that aren't already present (avoid duplicates with alwaysShow)
-          newText = injectMissingPrivateComments(newText, doc.uri.path, privateComments);
-        }
-
-        // Save ONLY the merged shared comments back to shared VCM (don't mix in private)
         await writeSharedVCM(relativePath, mergedSharedComments, vcmDir);
 
         // Mark this file as now in commented mode
@@ -828,9 +811,6 @@ async function activate(context) {
           vscode.window.showWarningMessage("VCM: You can only mark comment lines as private.");
           return;
         }
-
-        // Context key is the primary identity we use to match/move comments
-        const commentKey = buildContextKey(commentAtCursor);
 
         // Load current VCM state
         const sharedExists = await vcmFileExists(vcmDir, relativePath);
