@@ -8,26 +8,26 @@
 // ==============================================================================
 
 const vscode = require("vscode"); // vs code api module. lets us talk to and control VSCode itself
-const { getCommentMarkersForFile } = require("./src/commentMarkers");
+const { getCommentMarkersForFile } = require("./src/utils_copycode/commentMarkers");
 const { VCMContentProvider } = require("./src/split_view/contentProvider");
-const { hashLine } = require("./src/hash");
-const { injectComments, stripComments } = require("./src/injectExtractComments");
-const { parseDocComs } = require("./src/vcm/parseDocComs");
-const { mergeIntoVCMs } = require("./src/vcm/mergeIntoVCMs");
+const { hashLine } = require("./src/utils_copycode/hash");
+const { injectComments, stripComments } = require("./src/helpers_subroutines/injectExtractComments");
+const { parseDocComs } = require("./src/vcm/utils_copycode/parseDocComs");
+const { mergeIntoVCMs } = require("./src/vcm/helpers_subroutines/mergeIntoVCMs");
 const { createDetectors } = require("./src/detectModes");
-const { buildContextKey } = require("./src/buildContextKey");
+const { buildContextKey } = require("./src/utils_copycode/buildContextKey");
 const { setupSplitViewWatchers, updateSplitViewIfOpen, closeSplitView } = require("./src/split_view/splitViewManager");
-const { vcmFileExists } = require("./src/vcm/vcmFileExists");
-const { readBothVCMs, readSharedVCM, readPrivateVCM } = require("./src/vcm/readBothVCMs");
-const { writeSharedVCM, writePrivateVCM } = require("./src/vcm/createVCMFiles");
-const { findInlineCommentStart, isolateCodeLine, findPrevNextCodeLine } = require("./src/lineUtils");
-const { updateAlwaysShow } = require("./src/alwaysShow");
-const { mergeSharedTextCleanMode } = require("./src/mergeTextCleanMode");
-const { findCommentAtCursor } = require("./src/findCommentAtCursor");
-const { getCommentText } = require("./src/getCommentText");
-const { isSameComment } = require("./src/isSameComment");
-const { injectMissingPrivateComments } = require("./src/injectMissingPrivateComments");
-const { isAlwaysShow } = require("./src/alwaysShow");
+const { vcmFileExists } = require("./src/vcm/utils_copycode/vcmFileExists");
+const { readBothVCMs, readSharedVCM, readPrivateVCM } = require("./src/vcm/utils_copycode/readBothVCMs");
+const { writeSharedVCM, writePrivateVCM } = require("./src/vcm/helpers_subroutines/createVCMFiles");
+const { findInlineCommentStart, isolateCodeLine, findPrevNextCodeLine } = require("./src/utils_copycode/lineUtils");
+const { updateAlwaysShow } = require("./src/helpers_subroutines/alwaysShow");
+const { mergeSharedTextCleanMode } = require("./src/utils_copycode/mergeTextCleanMode");
+const { findCommentAtCursor } = require("./src/utils_copycode/findCommentAtCursor");
+const { getCommentText } = require("./src/utils_copycode/getCommentText");
+const { isSameComment } = require("./src/utils_copycode/isSameComment");
+const { injectMissingPrivateComments } = require("./src/helpers_subroutines/injectMissingPrivateComments");
+const { isAlwaysShow } = require("./src/helpers_subroutines/alwaysShow");
 
 // Global state variables for the extension
 let vcmEditor;           // Reference to the VCM split view editor

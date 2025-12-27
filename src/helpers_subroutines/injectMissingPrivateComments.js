@@ -1,6 +1,6 @@
-const { buildContextKey } = require("./buildContextKey");
+const { buildContextKey } = require("../utils_copycode/buildContextKey");
 const { injectComments } = require("./injectExtractComments");
-const { parseDocComs } = require("./vcm/parseDocComs");
+const { parseDocComs } = require("../vcm/utils_copycode/parseDocComs");
 
 /**
  * Inject private comments that are missing from the document

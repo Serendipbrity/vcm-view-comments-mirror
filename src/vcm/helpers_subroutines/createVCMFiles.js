@@ -1,5 +1,5 @@
 const vscode = require("vscode");
-const { vcmFileExists } = require("./vcmFileExists");
+const { vcmFileExists } = require("../utils_copycode/vcmFileExists");
 
 // ============================================================================
 // createVCMFiles()

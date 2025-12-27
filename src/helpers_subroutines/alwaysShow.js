@@ -1,6 +1,6 @@
 const vscode = require("vscode");
-const { buildContextKey } = require("./buildContextKey");
-const { findCommentAtCursor } = require("./findCommentAtCursor");
+const { buildContextKey } = require("../utils_copycode/buildContextKey");
+const { findCommentAtCursor } = require("../utils_copycode/findCommentAtCursor");
 
 /**
  * Check if a comment is marked as alwaysShow

@@ -1,6 +1,6 @@
-const { buildContextKey } = require("./buildContextKey");
-const { getCommentText } = require("./getCommentText");
-const { isAlwaysShow } = require("./alwaysShow");
+const { buildContextKey } = require("./utils_copycode/buildContextKey");
+const { getCommentText } = require("./utils_copycode/getCommentText");
+const { isAlwaysShow } = require("./helpers_subroutines/alwaysShow");
 
 function createDetectors({
   readSharedVCM,

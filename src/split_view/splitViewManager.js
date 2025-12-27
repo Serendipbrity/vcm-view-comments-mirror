@@ -7,14 +7,14 @@
 // ==============================================================================
 
 const vscode = require("vscode");
-const { mergeSharedTextCleanMode } = require("../mergeTextCleanMode");
-const { isAlwaysShow } = require("../alwaysShow");
+const { mergeSharedTextCleanMode } = require("../utils_copycode/mergeTextCleanMode");
+const { isAlwaysShow } = require("../helpers_subroutines/alwaysShow");
+const { injectComments, stripComments } = require("../helpers_subroutines/injectExtractComments");
+const { parseDocComs } = require("../vcm/utils_copycode/parseDocComs");
 // ---------------------------------------------------------------------------
 // Helper: Generate commented version (for split view when source is in clean mode)
 // ---------------------------------------------------------------------------
 async function generateCommentedSplitView(text, filePath, relativePath, includePrivate, readSharedVCM, readPrivateVCM, vcmDir, vcmPrivateDir) {
-  const { injectComments, stripComments } = require("../injectExtractComments");
-  const { parseDocComs } = require("../vcm/parseDocComs");
 
   let sharedComments, privateComments;
 
@@ -98,7 +98,6 @@ async function closeSplitView(getSplitViewState, commentJumpIndexCache = null) {
 // Setup split view watchers
 // ---------------------------------------------------------------------------
 function setupSplitViewWatchers(context, provider, getSplitViewState, readSharedVCM, readPrivateVCM, detectInitialMode, detectPrivateVisibility, commentJumpIndexCache = null) {
-  const { stripComments } = require("../injectExtractComments");
 
   // Split view live sync: update the VCM split view when source file changes
   let splitViewUpdateTimeout;
@@ -240,7 +239,6 @@ async function updateSplitViewIfOpen(
   readPrivateVCM,
   privateVisibilityOverride = undefined
 ) {
-  const { stripComments, injectComments } = require("../injectExtractComments");
   const { tempUri, vcmEditor, sourceDocUri, isCommentedMap, privateCommentsVisible } = getSplitViewState();
 
   // Manually update split view if it's open

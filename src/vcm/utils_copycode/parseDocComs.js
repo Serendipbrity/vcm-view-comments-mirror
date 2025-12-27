@@ -1,6 +1,6 @@
-const { findInlineCommentStart, isolateCodeLine, findPrevNextCodeLine } = require("../lineUtils");
-const { getCommentMarkersForFile } = require("../commentMarkers");
-const { hashLine } = require("../hash");
+const { findInlineCommentStart, isolateCodeLine, findPrevNextCodeLine } = require("../../utils_copycode/lineUtils");
+const { getCommentMarkersForFile } = require("../../utils_copycode/commentMarkers");
+const { hashLine } = require("../../utils_copycode/hash");
 // ===========================================================
 // parseDocComs
 // ===========================================================

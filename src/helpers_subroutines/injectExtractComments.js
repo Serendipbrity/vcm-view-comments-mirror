@@ -1,8 +1,8 @@
-const { getCommentMarkersForFile } = require("./commentMarkers");
-const { hashLine } = require("./hash");
-const { isolateCodeLine, findInlineCommentStart } = require("./lineUtils");
-const { parseDocComs } = require("./vcm/parseDocComs");
-const { buildContextKey } = require("./buildContextKey");
+const { getCommentMarkersForFile } = require("../utils_copycode/commentMarkers");
+const { hashLine } = require("../utils_copycode/hash");
+const { isolateCodeLine, findInlineCommentStart } = require("../utils_copycode/lineUtils");
+const { parseDocComs } = require("../vcm/utils_copycode/parseDocComs");
+const { buildContextKey } = require("../utils_copycode/buildContextKey");
 const { isAlwaysShow } = require("./alwaysShow");
 
 /**
