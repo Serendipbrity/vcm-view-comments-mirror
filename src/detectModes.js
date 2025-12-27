@@ -1,7 +1,10 @@
 const { buildContextKey } = require("./buildContextKey");
 
 function createDetectors({
-  readBothVCMs,
+  readSharedVCM,
+  vcmDir,
+  readPrivateVCM,
+  vcmPrivateDir,
   parseDocComs,
   vscode,
 }) {
@@ -15,7 +18,7 @@ function createDetectors({
     const relativePath = vscode.workspace.asRelativePath(doc.uri);
 
     try {
-      const { sharedComments = [] } = await readBothVCMs(relativePath);
+      const sharedComments = await readSharedVCM(relativePath, vcmDir);
 
       // No shared VCM → user never used clean/commented.
       // Just say "commented" if the file has any comments at all.
@@ -83,7 +86,7 @@ function createDetectors({
   async function detectPrivateVisibility(doc, relativePath) {
     try {
       // Load private comments from VCM
-      const { privateComments } = await readBothVCMs(relativePath);
+      const privateComments = await readPrivateVCM(relativePath, vcmPrivateDir);
 
       // If no private comments exist, return false (nothing to show)
       if (!privateComments || privateComments.length === 0) {

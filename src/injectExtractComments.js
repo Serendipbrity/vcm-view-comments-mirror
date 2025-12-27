@@ -2,43 +2,32 @@ const { getCommentMarkersForFile } = require("./commentMarkers");
 const { hashLine } = require("./hash");
 const { isolateCodeLine, findInlineCommentStart } = require("./lineUtils");
 const { parseDocComs } = require("./vcm/parseDocComs");
-const { commentMarkers } = require("./commentMarkers");
+const { buildContextKey } = require("./buildContextKey");
 
-// -----------------------------------------------------------------------------
-// Comment Injection
-// -----------------------------------------------------------------------------
-// Reconstruct source code by injecting comments back into clean code
-// cleanText → the code in clean mode (with comments stripped out).
-// comments → parsed metadata previously extracted from the commented version (what you want to re-inject).
-// includePrivate → flag to decide whether to re-insert private comments.. Default to privatemode off unless specified to avoid undefined
-// filePath → needed to get comment markers for isolateCodeLine
-function injectComments(cleanText, comments, includePrivate = false, filePath = '') {
+/**
+ * Inject ONLY the provided comments (except alwaysShow, which is never injected).
+ * Caller passes either shared list or private list.
+ */
+function injectComments(cleanText, filePath, comments = []) {
   // split("\n") turns the code into an array of lines so you can loop by index.
   const lines = cleanText.split("\n");
   const result = [];  // Where you'll push lines and comments in order, then join back later.
 
   // Get comment markers for this file type
-  const commentMarkers = filePath ? getCommentMarkersForFile(filePath) : [];
+  const commentMarkers = getCommentMarkersForFile(filePath);
 
-  // Include/exclude private comments based on if includePrivate is toggled on or off
-  const commentsToInject = comments.filter(c => {
-    if (c.alwaysShow) return false; // Always exclude alwaysShow so no. double injection because they were never removed
-    if (c.isPrivate && !includePrivate) return false; // Exclude private if not explicitly included
-    return true;
-  });
+  // Never inject alwaysShow (those live physically in the file)
+  const commentsToInject = (comments || []).filter(c => !c.alwaysShow);
 
   // Create an empty Map to link each line’s unique hash → all positions in the file where that line exists. 
   // (handles duplicates)
   // You use a Map instead of an object because the keys (hash strings) are not simple variable names and you may have duplicates.
   const lineHashToIndices = new Map();
-  for (let i = 0; i < lines.length; i++) { // Iterates through every line.
-    // Remove whitespace per line and if the result is empty (meaning blank line), it skips it. You don’t hash blank lines because they’re not meaningful anchors for comments.
-    if (lines[i].trim()) { 
-      // Hash each unique content line
-      // Takes the current line’s code content (not line number) and generates a deterministic hash.
-      // Hashes let you re-anchor comments even if the code is moved up or down because you can later match by the same hash.
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+
       const codeIdentity = isolateCodeLine(lines[i], commentMarkers);
-      const hash = hashLine(codeIdentity, 0); 
+      const hash = hashLine(codeIdentity, 0);
       if (!lineHashToIndices.has(hash)) { // If this hash hasn’t been seen before
         lineHashToIndices.set(hash, []); // Create a new list as its value in the map.
       }
@@ -47,8 +36,7 @@ function injectComments(cleanText, comments, includePrivate = false, filePath = 
       // If the same text appears twice (say, import torch on lines 3 and 20),
       // the map will have: "hash(import torch)" → [3, 20]
       // So later you can decide which one the comment should attach to.
-      lineHashToIndices.get(hash).push(i);
-    }
+    lineHashToIndices.get(hash).push(i);
   }
 
   // Helper: Find best matching line index among duplicates using context hashes
@@ -109,30 +97,15 @@ function injectComments(cleanText, comments, includePrivate = false, filePath = 
       return { idx, score };
     });
 
-    // Sort by score (highest first), then by index (to maintain order)
-    scores.sort((a, b) => {
-      // Sort by score descending
-      if (b.score !== a.score) return b.score - a.score;
-      return a.idx - b.idx; // sort and return index by index ascending.
-    });
-
-    return scores[0].idx; // Return the index with highest contextual match.
+    scores.sort((a, b) => (b.score - a.score) || (a.idx - b.idx));
+    return scores[0].idx;
   };
 
-  // Separate block comments by type and sort by commentedLineIndex
-  // Ensure that when you loop through comments, they’re in natural file order, not random JSON order.
-  // .sort(...) orders the comment blocks from top to bottom according to where they originally appeared by line number in the file.
-  // That way, when you inject them, they’re added in the same vertical order they were extracted.
-  const blockComments = commentsToInject.filter(c => c.type === "block").sort((a, b) => {
-    // Each block comment object has a block array. each el = 1 comment line of the block
-    // a.block[0]?.commentedLineIndex → accesses the first line of that block (top of the comment) and gets its original line number in the old file.
-    // The ?. (optional chaining) avoids errors if block or [0] doesn’t exist (so it returns undefined instead of crashing).
-    // || 0 = “if we can’t find its original position, assume line 0.”
-    const aLine = a.block[0]?.commentedLineIndex || 0; 
-    const bLine = b.block[0]?.commentedLineIndex || 0;
-    return aLine - bLine; // sort them ascending (smallest line number - top of file first).
-  });
-  const inlineComments = commentsToInject.filter(c => c.type === "inline").sort((a, b) => a.commentedLineIndex - b.commentedLineIndex);
+  const blockComments = commentsToInject.filter(c => c.type === "block").sort((a, b) => (a.block?.[0]?.commentedLineIndex || 0) - (b.block?.[0]?.commentedLineIndex || 0));
+
+  const inlineComments = commentsToInject
+    .filter(c => c.type === "inline")
+    .sort((a, b) => (a.commentedLineIndex || 0) - (b.commentedLineIndex || 0));
 
   // Track which indices we've already used
   const usedIndices = new Set();
@@ -142,6 +115,7 @@ function injectComments(cleanText, comments, includePrivate = false, filePath = 
   // value = array of block comment objects that attach to that code line.
   // This is what injectComments() uses later to decide “for line i, which comments go above it?”
   const blockMap = new Map();
+  const inlineMap = new Map();
 
   // Loops through every block comment that needs to be inserted.
   for (const block of blockComments) {
@@ -149,13 +123,10 @@ function injectComments(cleanText, comments, includePrivate = false, filePath = 
     // lineHashToIndices maps a hash of a code line → all possible line indices in the current document that match that code’s hash.
     // block.anchor is that hash value — it’s how we know which code line this comment originally belonged to.
     const indices = lineHashToIndices.get(block.anchor);
-    // Only proceed if the anchor’s code still exists in the file (non-null and non-empty array).
-    if (indices && indices.length > 0) {
-      // findBestMatch() decides which of those possible indices best matches this comment.
-      // Example: if that same code line appears twice in the file, it picks the one nearest to where the comment used to be.
-      // It also receives usedIndices to avoid assigning a block to an index already taken.
-      const targetIndex = findBestMatch(block, indices, usedIndices);
-      usedIndices.add(targetIndex); // Adds the target index to usedIndices (taken) so you don’t double-assign it.
+    if (!indices?.length) continue;
+
+    const targetIndex = findBestMatch(block, indices, usedIndices);
+    usedIndices.add(targetIndex); // Adds the target index to usedIndices (taken) so you don’t double-assign it.
 
       // if the map doesnt exist yet for this index
       if (!blockMap.has(targetIndex)) {
@@ -165,22 +136,15 @@ function injectComments(cleanText, comments, includePrivate = false, filePath = 
       // Actually stores the comment object(s) in that array — meaning:
       // “When reinjecting, for this line index, insert this block comment above it.”
       blockMap.get(targetIndex).push(block);
-    }
   }
 
-  // Same logic as blockMap, but this one tracks inline comments.
-  // Key = line index of code line, value = array of inline comments that go on that line.
-  const inlineMap = new Map();
   for (const inline of inlineComments) {
     const indices = lineHashToIndices.get(inline.anchor);
-    if (indices && indices.length > 0) {
-      const targetIndex = findBestMatch(inline, indices, usedIndices);
-      // DON'T mark as used for inline comments - multiple inlines can be on same line!
-      // usedIndices.add(targetIndex);
+    if (!indices?.length) continue;
 
-      if (!inlineMap.has(targetIndex)) inlineMap.set(targetIndex, []);
-      inlineMap.get(targetIndex).push(inline);
-    }
+    const targetIndex = findBestMatch(inline, indices, usedIndices);
+    if (!inlineMap.has(targetIndex)) inlineMap.set(targetIndex, []);
+    inlineMap.get(targetIndex).push(inline);
   }
 
   // Rebuild the file line by line
@@ -194,21 +158,16 @@ function injectComments(cleanText, comments, includePrivate = false, filePath = 
     if (blocks) {
       for (const block of blocks) {
         // Determine which version to inject: text_cleanMode (if different) or block
-        const hasTextCleanMode = block.text_cleanMode && Array.isArray(block.text_cleanMode);
-        const cleanModeTexts = hasTextCleanMode ? block.text_cleanMode.map(b => b.text).join('\n') : '';
-        const blockTexts = block.block ? block.block.map(b => b.text).join('\n') : '';
-        const blocksIdentical = hasTextCleanMode && block.block && cleanModeTexts === blockTexts;
+        const hasTextCleanMode = Array.isArray(block.text_cleanMode);
+        const cleanModeTexts = hasTextCleanMode ? block.text_cleanMode.map(b => b.text).join("\n") : "";
+        const blockTexts = Array.isArray(block.block) ? block.block.map(b => b.text).join("\n") : "";
+        const blocksIdentical = hasTextCleanMode && Array.isArray(block.block) && cleanModeTexts === blockTexts;
 
-        let linesToInject;
-        if (hasTextCleanMode && !blocksIdentical) {
+        let linesToInject = [];
+        if (hasTextCleanMode && !blocksIdentical) 
           // Use text_cleanMode (newly typed version)
           linesToInject = block.text_cleanMode;
-        } else if (block.block) {
-          // Use block (VCM version or identical)
-          linesToInject = block.block;
-        } else {
-          linesToInject = [];
-        }
+        else if (Array.isArray(block.block)) linesToInject = block.block;
 
         // Inject all lines from the block (includes leading blanks, comments, and trailing blanks)
         for (const lineObj of linesToInject) {
@@ -217,19 +176,16 @@ function injectComments(cleanText, comments, includePrivate = false, filePath = 
       }
     }
 
-    // STEP 2: Add the code line itself
     let line = lines[i];
 
-    // STEP 3: Check if this line has an inline comment
     const inlines = inlineMap.get(i);
-    if (inlines && inlines.length > 0) {
-      // Should only be one inline comment per line (contains all combined comments)
+    if (inlines?.length) {
+      // If multiple inlines on same line, you probably want to append all.
+      // Current behavior: first only (preserving your existing behavior).
       const inline = inlines[0];
       // Combine text_cleanMode (string) and text
       let commentText = "";
-
-      // Only use text_cleanMode if it's different from text (avoid double injection)
-      const hasTextCleanMode = inline.text_cleanMode && typeof inline.text_cleanMode === 'string';
+      const hasTextCleanMode = typeof inline.text_cleanMode === "string";
       const textsIdentical = hasTextCleanMode && inline.text === inline.text_cleanMode;
 
       if (hasTextCleanMode && !textsIdentical) {
@@ -251,132 +207,86 @@ function injectComments(cleanText, comments, includePrivate = false, filePath = 
   return result.join("\n");
 }
 
-// Remove all comments from source code, leaving only code and blank lines
-// This creates the "clean" version for split view or toggle mode
-// Process:
-// 1. Filter out lines that are pure comments (start with #, //, etc)
-// 2. Strip inline comments from mixed code+comment lines
-// 3. Preserve blank lines to maintain code structure
-// 4. Handle strings properly - don't remove comment markers inside strings
-// 5. Language-aware: only remove markers appropriate for the file type
-// 6. Skip comments marked with alwaysShow flag (they appear in all modes)
-function stripComments(text, filePath, vcmComments = [], keepPrivate = false, isCleanMode = false) {
+/**
+ * Strip ONLY the comments represented by vcmComments from the document text.
+ * - Does NOT strip arbitrary syntax comments.
+ * - Does NOT need alwaysShow passed in; it ignores alwaysShow internally anyway.
+ */
+function stripComments(text, filePath, vcmComments = []) {
   // Get comment markers for this file type from our centralized config
   const commentMarkers = getCommentMarkersForFile(filePath);
 
-  // Build regex pattern for this file type
-  const markerPattern = commentMarkers.map(m => m.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  const lineStartPattern = new RegExp(`^(${markerPattern})`);
+  // Keys we intend to strip (explicit targets only)
+  // alwaysShow is never stripped, ever.
+  const stripKeys = new Set(
+    (vcmComments || [])
+      .filter(c => !c.alwaysShow)                // never target alwaysShow
+      .map(c => buildContextKey(c))              // stable identity
+  );
 
-  // Build sets of comment context keys that should be kept
-  // Use buildContextKey() instead of anchor to avoid "ghost marking" siblings
-  const { buildContextKey } = require("./buildContextKey");
-  const alwaysShowKeys = new Set();
-  const privateKeys = new Set();
-  for (const comment of vcmComments) {
-    if (comment.alwaysShow) {
-      alwaysShowKeys.add(buildContextKey(comment));
-    }
-    if (comment.isPrivate && keepPrivate) {
-      privateKeys.add(buildContextKey(comment));
-    }
-  }
+  // Nothing to do
+  if (stripKeys.size === 0) return text;
 
   // # TODO revisit this for the spacing stuff
   // Extract current comments to identify blank lines within comment blocks
   // Pass vcmComments and mode so blank line extraction works correctly
   const docComments = parseDocComs(text, filePath);
 
-  // Build sets for tracking lines
-  const allCommentBlockLines = new Set();
-  const alwaysShowLines = new Set();
-  const alwaysShowInlineComments = new Map();
-  const privateLines = new Set();
-  const privateInlineComments = new Map();
+  // Track:
+  // - Entire lines to remove (block comment lines + blank lines that are part of those parsed blocks)
+  // - Inline strips: lineIndex -> commentStartPos (char index where inline comment begins)
+  const linesToRemove = new Set();
+  const inlineStripAt = new Map(); // lineIndex -> commentStartIdx
 
   for (const current of docComments) {
-    if (current.type === "block" && current.block) {
-      // Track all lines in all comment blocks (including blank lines WITHIN them)
-      // But DO NOT track leading/trailing blank lines - those should stay visible in ALL modes
-      for (const blockLine of current.block) {
-        allCommentBlockLines.add(blockLine.commentedLineIndex);
-      }
+    const key = buildContextKey(current);
+    if (!stripKeys.has(key)) continue; // this comment is NOT targeted, leave it
 
-      // If this block is alwaysShow, also add to alwaysShow set
-      const currentKey = buildContextKey(current);
-      if (alwaysShowKeys.has(currentKey)) {
-        for (const blockLine of current.block) {
-          alwaysShowLines.add(blockLine.commentedLineIndex);
-        }
+    if (current.type === "block" && Array.isArray(current.block)) {
+      // Remove only this parsed block's lines (including blanks within the parsed block)
+      for (const b of current.block) {
+        linesToRemove.add(b.commentedLineIndex);
       }
+      continue;
+    }
 
-      // If this block is private and we're keeping private, add to private set
-      if (privateKeys.has(currentKey)) {
-        for (const blockLine of current.block) {
-          privateLines.add(blockLine.commentedLineIndex);
+    if (current.type === "inline") {
+      // Remove only the inline segment on that line (keep code portion)
+      // Use real marker finder to avoid stripping marker inside strings.
+      const lineIndex = current.commentedLineIndex;
+      const lineText = text.split("\n")[lineIndex] ?? "";
+
+      const commentStartIdx = findInlineCommentStart(lineText, commentMarkers, {
+        requireWhitespaceBefore: true,
+      });
+
+      // Only strip if we can locate the marker start
+      if (commentStartIdx >= 0) {
+        // If multiple targeted inline comments somehow map to same line, keep earliest strip position
+        const existing = inlineStripAt.get(lineIndex);
+        if (existing === undefined || commentStartIdx < existing) {
+          inlineStripAt.set(lineIndex, commentStartIdx);
         }
-      }
-    } else if (current.type === "inline") {
-      const currentKey = buildContextKey(current);
-      if (alwaysShowKeys.has(currentKey)) {
-        // For alwaysShow inline comments, store the line index and text
-        alwaysShowLines.add(current.commentedLineIndex);
-        alwaysShowInlineComments.set(current.commentedLineIndex, current.text || "");
-      }
-      if (privateKeys.has(currentKey)) {
-        // For private inline comments (if keeping), store the line index and text
-        privateLines.add(current.commentedLineIndex);
-        privateInlineComments.set(current.commentedLineIndex, current.text || "");
       }
     }
   }
 
-  // Combine alwaysShow and private into comment maps for inline handling
-  const inlineCommentsToKeep = new Map([...alwaysShowInlineComments, ...privateInlineComments]);
-
+  // Apply removals
   const lines = text.split("\n");
-  const filteredLines = [];
+  const out = [];
 
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
-    const line = lines[lineIndex];
-    const trimmed = line.trim();
+  for (let i = 0; i < lines.length; i++) {
+    if (linesToRemove.has(i)) continue;
 
-    // Keep lines that are marked as alwaysShow or private (if keeping private)
-    if (alwaysShowLines.has(lineIndex) || privateLines.has(lineIndex)) {
-      filteredLines.push(line);
-      continue;
-    }
-
-    // Keep blank lines UNLESS they're part of a comment block (i.e., blank lines BETWEEN comment lines)
-    // Blank lines before/after comments should ALWAYS be kept
-    if (!trimmed) {
-      if (!allCommentBlockLines.has(lineIndex)) {
-        filteredLines.push(line);
-      }
-      continue;
-    }
-
-    // Filter out pure comment lines (unless they're alwaysShow or private)
-    if (lineStartPattern.test(trimmed)) {
-      continue; // Skip this line
-    }
-
-    // This is a code line - check for inline comments
-    if (inlineCommentsToKeep.has(lineIndex)) {
-      // This line has an alwaysShow or private inline comment - keep the entire line
-      filteredLines.push(line);
+    const stripPos = inlineStripAt.get(i);
+    if (stripPos !== undefined) {
+      out.push(lines[i].substring(0, stripPos).trimEnd());
     } else {
-      // Remove inline comments: everything after comment marker (if not in string)
-      const commentPos = findInlineCommentStart(line, commentMarkers, { requireWhitespaceBefore: true });
-      if (commentPos >= 0) {
-        filteredLines.push(line.substring(0, commentPos).trimEnd());
-      } else {
-        filteredLines.push(line);
-      }
+      out.push(lines[i]);
     }
   }
 
-  return filteredLines.join("\n");
+  return out.join("\n");
 }
 
 module.exports = {

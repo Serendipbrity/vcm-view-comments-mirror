@@ -1,7 +1,7 @@
 const vscode = require("vscode");
 const { buildContextKey } = require("./buildContextKey");
 
-async function updateAlwaysShowContext({ readBothVCMs, parseDocComs, hashLine }) {
+async function updateAlwaysShowContext({ readBothVCMs, parseDocComs }) {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
       await vscode.commands.executeCommand('setContext', 'vcm.commentIsAlwaysShow', false);

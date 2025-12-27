@@ -19,7 +19,7 @@ const { buildContextKey } = require("./src/buildContextKey");
 const { setupSplitViewWatchers, updateSplitViewIfOpen, closeSplitView } = require("./src/split_view/splitViewManager");
 const { vcmFileExists } = require("./src/vcm/vcmFileExists");
 const { readBothVCMs, readSharedVCM, readPrivateVCM } = require("./src/vcm/readBothVCMs");
-const { writeSharedVCM, writePrivateVCM, writeBothVCMs, } = require("./src/vcm/createVCMFiles");
+const { writeSharedVCM, writePrivateVCM } = require("./src/vcm/createVCMFiles");
 const { findInlineCommentStart, isolateCodeLine, findPrevNextCodeLine } = require("./src/lineUtils");
 const { updateAlwaysShow } = require("./src/alwaysShow");
 const { mergeSharedTextCleanMode } = require("./src/mergeTextCleanMode");
@@ -117,7 +117,6 @@ function buildCommentJumpIndex(parsedComments, docText, sourceFilePathForMarkers
     const raw = lines[i];
     if (!raw.trim()) continue;
 
-    // Use parseDocComs' exact logic to calculate anchor hashes
     const commentStart = findInlineCommentStart(raw, commentMarkers, { requireWhitespaceBefore: true });
 
     if (commentStart >= 0) {
@@ -209,7 +208,6 @@ async function activate(context) {
   
   const deps = { readBothVCMs: (relativePath) => readBothVCMs(relativePath, vcmDir, vcmPrivateDir), // shared + private
   parseDocComs,
-  hashLine,
   };
 
   context.subscriptions.push(
@@ -227,7 +225,10 @@ async function activate(context) {
   
 
   const { detectInitialMode, detectPrivateVisibility } = createDetectors({
-    readBothVCMs: (relativePath) => readBothVCMs(relativePath, vcmDir, vcmPrivateDir),
+    readSharedVCM: (relativePath) => readSharedVCM(relativePath, vcmDir),
+    vcmDir,
+    readPrivateVCM: (relativePath) => readPrivateVCM(relativePath, vcmPrivateDir),
+    vcmPrivateDir,
     parseDocComs,
     vscode,
   });
@@ -302,14 +303,37 @@ async function activate(context) {
 
     const docComments = parseDocComs(text, doc.uri.path);
 
+    // Build a set of private comment keys from private VCM to identify which parsed comments are private
+    // CRITICAL: In commented mode, keys can change when code moves (prevHash/nextHash changes)
+    // So we also build a text-based map for fallback matching
+    const privateKeys = new Set(privateVCMComments.map(c => buildContextKey(c)));
+    const privateTextMap = new Map();
+    for (const c of privateVCMComments) {
+      const textKey = c.text || (c.block ? c.block.map(b => b.text).join("\n") : "");
+      if (textKey) privateTextMap.set(textKey, c);
+    }
+
     // ----------------------------
-    // A) SHARED PIPELINE (reads private only to avoid stealing it)
+    // A) SHARED PIPELINE
     // ----------------------------
+    // Filter out private comments from docComments for shared processing
+    // Private comments should NEVER be in shared VCM
+    // Match by BOTH context key AND text content (handles code movement)
+    const sharedDocComments = docComments.filter(c => {
+      // Check context key first
+      if (privateKeys.has(buildContextKey(c))) return false;
+
+      // Also check by text content (in case code moved and key changed)
+      const currentText = c.text || (c.block ? c.block.map(b => b.text).join("\n") : "");
+      if (currentText && privateTextMap.has(currentText)) return false;
+
+      return true; // Not private, include in shared
+    });
+
     let finalShared = mergeIntoVCMs({
       isCommented,
-      docComments,
-      vcmComments: sharedVCMComments,         // shared store
-      otherVCMComments: privateVCMComments,   // exclusion-only
+      docComments: sharedDocComments,
+      vcmComments: sharedVCMComments,
       isPrivateMode: false,
       wasJustInjected,
     });
@@ -327,39 +351,44 @@ async function activate(context) {
       return true;
     });
 
+    // CRITICAL: Final safety filter - ensure NO private comments end up in shared VCM
+    finalShared = finalShared.filter(comment => !comment.isPrivate);
+
     // ✅ WRITE SHARED ONLY
     await writeSharedVCM(relativePath, finalShared, vcmDir);
 
     // ----------------------------
-    // B) PRIVATE PIPELINE (NO shared awareness)
+    // B) PRIVATE PIPELINE
     // Only run this if private exists or private is visible.
     // ----------------------------
     const privateVisibleNow = privateCommentsVisible.get(doc.uri.fsPath) === true;
 
     if (privateExists || privateVisibleNow) {
+      // Filter to only private comments from docComments for private processing
+      // Match by BOTH context key AND text content (handles code movement)
+      const privateDocComments = docComments.filter(c => {
+        // Check context key first
+        if (privateKeys.has(buildContextKey(c))) return true;
+
+        // Also check by text content (in case code moved and key changed)
+        const currentText = c.text || (c.block ? c.block.map(b => b.text).join("\n") : "");
+        if (currentText && privateTextMap.has(currentText)) return true;
+
+        return false; // Not private, don't include
+      });
+
       let finalPrivate = mergeIntoVCMs({
         isCommented,
-        docComments,
-        vcmComments: privateVCMComments,   // private store
-        otherVCMComments: sharedVCMComments, // exclusion: don't steal shared comments
+        docComments: privateDocComments,
+        vcmComments: privateVCMComments,
         isPrivateMode: true,
         wasJustInjected,
       });
 
-      // optional: same empty-comment filter, private only
-      finalPrivate = finalPrivate.filter(comment => {
-        // For inline comments: must have text or text_cleanMode
-        if (comment.type === "inline") {
-          return (comment.text && comment.text.trim()) ||
-                (comment.text_cleanMode && comment.text_cleanMode.trim());
-        } else if (comment.type === "block") {
-          // For block comments: must have block or text_cleanMode with content
-          const hasBlock = comment.block && Array.isArray(comment.block) && comment.block.length > 0;
-          const hasTextCleanMode = comment.text_cleanMode && Array.isArray(comment.text_cleanMode) && comment.text_cleanMode.length > 0;
-          return hasBlock || hasTextCleanMode;
-        }
-        return true;
-      });
+      // CRITICAL: DO NOT filter out empty private comments
+      // Private comments persist until explicitly unmarked, even if content is deleted
+      // Only verify that isPrivate flag is set
+      finalPrivate = finalPrivate.filter(comment => comment.isPrivate === true);
 
       // ✅ WRITE PRIVATE ONLY
       await writePrivateVCM(relativePath, finalPrivate, vcmPrivateDir);
@@ -397,6 +426,7 @@ async function activate(context) {
     isCommentedMap,
     privateCommentsVisible,
     vcmDir,
+    vcmPrivateDir,
     setSplitViewState: (state) => {
       if (state.vcmEditor !== undefined) vcmEditor = state.vcmEditor;
       if (state.tempUri !== undefined) tempUri = state.tempUri;
@@ -412,7 +442,8 @@ async function activate(context) {
     context,
     provider,
     getSplitViewState,
-    (relativePath) => readBothVCMs(relativePath, vcmDir, vcmPrivateDir),
+    (relativePath) => readSharedVCM(relativePath, vcmDir),
+    (relativePath) => readPrivateVCM(relativePath, vcmPrivateDir),
     detectInitialMode,
     detectPrivateVisibility,
     _commentJumpIndexCache
@@ -455,38 +486,32 @@ async function activate(context) {
 
     if (currentIsCommented === true) {
       // Currently in commented mode -> switch to clean mode (hide comments)
-      // If no VCM exists yet, create it immediately so the first toggle succeeds
-      const sharedExistsBootstrap = await vcmFileExists(vcmDir, relativePath);
-      const privateExistsBootstrap = await vcmFileExists(vcmPrivateDir, relativePath);
-      if (!sharedExistsBootstrap && !privateExistsBootstrap) {
-        const extractedBootstrap = parseDocComs(text, doc.uri.path);
-
-        await writeSharedVCM(relativePath, extractedBootstrap, vcmDir);
-        // await createVCMFiles(relativePath, extractedBootstrap, vcmDir);
-      }
-
-      // Ensure a .vcm file exists before stripping
-      const vcmExists = await vcmFileExists(vcmDir, relativePath);
-      if (!vcmExists) {
-        // No .vcm yet — extract and save before removing comments
-        // We're still in commented mode here, so this will extract all comments
-        await saveVCM(doc, true); // allowCreate = true for explicit toggle action
-      }
-
-      // If liveSync is disabled, always update manually
-      // We're still in commented mode here, so this will extract all comments
+      // Single VCM creation path: Use saveVCM(doc, true) to create/update
       const config = vscode.workspace.getConfiguration("vcm");
       const liveSync = config.get("liveSync", false);
-      if (!liveSync) {
-        await saveVCM(doc, true); // allowCreate = true for explicit toggle action
+
+      // Always ensure VCM exists before stripping (even if liveSync is on)
+      const vcmExists = await vcmFileExists(vcmDir, relativePath);
+      if (!vcmExists || !liveSync) {
+        // Create VCM if missing OR update if liveSync is disabled
+        await saveVCM(doc, true); // Single canonical creation/update path
       }
 
-      // Load ALL VCM comments (shared + private) to check for alwaysShow and isPrivate
-      const { allComments: vcmComments } = await readBothVCMs(relativePath, vcmDir, vcmPrivateDir);
+      // Load shared comments for stripping
+      const sharedComments = await readSharedVCM(relativePath, vcmDir);
 
-      // Strip comments to show clean version (but keep alwaysShow and private if visible)
-      const keepPrivate = privateCommentsVisible.get(doc.uri.fsPath) === true;
-      newText = stripComments(text, doc.uri.path, vcmComments, keepPrivate);
+      // Strip shared toggleable comments (never strip alwaysShow)
+      const sharedToggleables = sharedComments.filter(c => !c.alwaysShow);
+      newText = stripComments(text, doc.uri.path, sharedToggleables);
+
+      // If private is OFF, also strip private comments (preserving private visibility state)
+      const privateVisible = privateCommentsVisible.get(doc.uri.fsPath) === true;
+      if (!privateVisible) {
+        const privateComments = await readPrivateVCM(relativePath, vcmPrivateDir);
+        const privateToggleables = privateComments.filter(c => !c.alwaysShow);
+        newText = stripComments(newText, doc.uri.path, privateToggleables);
+      }
+
       // Mark this file as now in clean mode
       isCommentedMap.set(doc.uri.fsPath, false);
       // DO NOT change privateCommentsVisible - private comment visibility persists across mode toggles
@@ -494,21 +519,31 @@ async function activate(context) {
     } else {
       // Currently in clean mode -> switch to commented mode (show comments)
       try {
-        // Load shared comments only for toggle (private is separate)
+        // Load shared comments
         const existingSharedComments = await readSharedVCM(relativePath, vcmDir);
-        const existingPrivateComments = await readPrivateVCM(relativePath, vcmPrivateDir);
 
         // Merge text_cleanMode into text/block and clear text_cleanMode for shared comments
         const mergedSharedComments = mergeSharedTextCleanMode(existingSharedComments);
 
-        // # TODO: these few lines are in multiple places
-        // Combine shared and private comments (all need to be in the array for proper filtering)
-        const allMergedComments = [...mergedSharedComments, ...existingPrivateComments];
-
         // Strip any comments typed in clean mode before injecting VCM comments
-        const cleanText = stripComments(text, doc.uri.path, allMergedComments, false);
-        const includePrivate = privateCommentsVisible.get(doc.uri.fsPath) === true;
-        newText = injectComments(cleanText, allMergedComments, includePrivate);
+        const cleanText = stripComments(text, doc.uri.path, mergedSharedComments);
+
+        // Inject shared comments
+        newText = injectComments(cleanText, doc.uri.path, mergedSharedComments);
+
+        // If private is ON, also inject private comments (preserving private visibility state)
+        const privateVisible = privateCommentsVisible.get(doc.uri.fsPath) === true;
+        if (privateVisible) {
+          const privateComments = await readPrivateVCM(relativePath, vcmPrivateDir);
+          // Only inject private comments that aren't already present (avoid duplicates with alwaysShow)
+          const { parseDocComs } = require("./src/vcm/parseDocComs");
+          const existing = parseDocComs(newText, doc.uri.path);
+          const existingKeys = new Set(existing.map(c => buildContextKey(c)));
+          const missingPrivate = privateComments.filter(c => !existingKeys.has(buildContextKey(c)));
+          if (missingPrivate.length > 0) {
+            newText = injectComments(newText, doc.uri.path, missingPrivate);
+          }
+        }
 
         // Save ONLY the merged shared comments back to shared VCM (don't mix in private)
         await writeSharedVCM(relativePath, mergedSharedComments, vcmDir);
@@ -525,13 +560,27 @@ async function activate(context) {
         isCommentedMap.set(doc.uri.fsPath, true);
         await saveVCM(doc, true);
         try {
-          const { sharedComments, privateComments } = await readBothVCMs(relativePath, vcmDir, vcmPrivateDir);
-          const allComments = [...sharedComments, ...privateComments];
+          const sharedComments = await readSharedVCM(relativePath, vcmDir);
 
-          // Strip comments before injecting (except alwaysShow and private if visible)
-          const keepPrivate = privateCommentsVisible.get(doc.uri.fsPath) === true;
-          const cleanText = stripComments(text, doc.uri.path, allComments, keepPrivate);
-          newText = injectComments(cleanText, allComments, keepPrivate);
+          // Strip any comments typed in clean mode
+          const cleanText = stripComments(text, doc.uri.path, sharedComments);
+
+          // Inject shared comments
+          newText = injectComments(cleanText, doc.uri.path, sharedComments);
+
+          // If private is ON, also inject private comments (preserving private visibility state)
+          const privateVisible = privateCommentsVisible.get(doc.uri.fsPath) === true;
+          if (privateVisible) {
+            const privateComments = await readPrivateVCM(relativePath, vcmPrivateDir);
+            // Only inject private comments that aren't already present (avoid duplicates with alwaysShow)
+            const { parseDocComs } = require("./src/vcm/parseDocComs");
+            const existing = parseDocComs(newText, doc.uri.path);
+            const existingKeys = new Set(existing.map(c => buildContextKey(c)));
+            const missingPrivate = privateComments.filter(c => !existingKeys.has(buildContextKey(c)));
+            if (missingPrivate.length > 0) {
+              newText = injectComments(newText, doc.uri.path, missingPrivate);
+            }
+          }
 
           // Mark that we just injected from VCM - don't re-extract on next save
           justInjectedFromVCM.add(doc.uri.fsPath);
@@ -588,14 +637,25 @@ async function activate(context) {
           return;
         }
 
-        // Load or create VCM comments
-        let comments = [];
+        // Ensure VCM exists before modifying metadata
         const sharedComments = await readSharedVCM(relativePath, vcmDir);
 
-        // If no shared VCM exists - save all extracted comments
+        // If no shared VCM exists - create it first via saveVCM
         if (!sharedComments || sharedComments.length === 0) {
-          commentAtCursor.alwaysShow = true;
-          comments = docComments;
+          await saveVCM(doc, true); // Single creation path
+          // Re-read after creation
+          const newlyCreatedComments = await readSharedVCM(relativePath, vcmDir);
+          comments = newlyCreatedComments;
+
+          // Now mark the comment
+          const currentKey = buildContextKey(commentAtCursor);
+          const targetVcmComment = comments.find(c => buildContextKey(c) === currentKey);
+          if (targetVcmComment) {
+            targetVcmComment.alwaysShow = true;
+          } else {
+            commentAtCursor.alwaysShow = true;
+            comments.push(commentAtCursor);
+          }
         } else {
           // VCM exists - mark the comment in existing list using context matching
           comments = sharedComments;
@@ -627,7 +687,8 @@ async function activate(context) {
           provider,
           relativePath,
           getSplitViewState,
-          (relativePath) => readBothVCMs(relativePath, vcmDir, vcmPrivateDir)
+          (relativePath) => readSharedVCM(relativePath, vcmDir),
+          (relativePath) => readPrivateVCM(relativePath, vcmPrivateDir)
         );
       } catch (err) {
         vscode.window.showErrorMessage("VCM: Error marking comment as Always Show: " + err.message);
@@ -675,14 +736,12 @@ async function activate(context) {
           return;
         }
 
-        const comments = allComments;
-
         // Build context key for the comment at cursor
         const currentKey = buildContextKey(commentAtCursor);
 
         // Search for comment with matching context key and remove alwaysShow
         let found = false;
-        for (const c of comments) {
+        for (const c of allComments) {
           if (buildContextKey(c) === currentKey && c.alwaysShow) {
             delete c.alwaysShow;
             found = true;
@@ -695,7 +754,7 @@ async function activate(context) {
           return;
         }
 
-        await writeSharedVCM(relativePath, comments, vcmDir);
+        await writeSharedVCM(relativePath, allComments, vcmDir);
         // await createVCMFiles(relativePath, comments, vcmDir);
 
         // Check if we're in clean mode - if so, remove the comment from the document
@@ -752,7 +811,8 @@ async function activate(context) {
           provider,
           relativePath,
           getSplitViewState,
-          (relativePath) => readBothVCMs(relativePath, vcmDir, vcmPrivateDir)
+          (relativePath) => readSharedVCM(relativePath, vcmDir),
+          (relativePath) => readPrivateVCM(relativePath, vcmPrivateDir)
         );
       } catch (err) {
         vscode.window.showErrorMessage("VCM: Error unmarking comment: " + err.message);
@@ -803,9 +863,18 @@ async function activate(context) {
         const sharedExists = await vcmFileExists(vcmDir, relativePath);
         const privateExists = await vcmFileExists(vcmPrivateDir, relativePath);
 
-        // Read lists (if file doesn't exist, treat as empty)
-        let sharedComments = sharedExists ? await readSharedVCM(relativePath, vcmDir) : [];
-        let privateComments = privateExists ? await readPrivateVCM(relativePath, vcmPrivateDir) : [];
+        // If no VCM exists at all, create it first via saveVCM (single creation path)
+        let sharedComments, privateComments;
+        if (!sharedExists && !privateExists) {
+          await saveVCM(doc, true);
+          // Re-read after creation
+          sharedComments = await readSharedVCM(relativePath, vcmDir);
+          privateComments = [];
+        } else {
+          // Read lists (if file doesn't exist, treat as empty)
+          sharedComments = sharedExists ? await readSharedVCM(relativePath, vcmDir) : [];
+          privateComments = privateExists ? await readPrivateVCM(relativePath, vcmPrivateDir) : [];
+        }
 
         // Helper: compare doc comment to a VCM comment safely
         // - Always match by context key
@@ -852,8 +921,17 @@ async function activate(context) {
         // 3) Write both VCMs back
         //    - shared gets the filtered list
         //    - private gets the added list (and will create the file if needed)
-        await writeSharedVCM(relativePath, sharedComments, vcmDir);
         await writePrivateVCM(relativePath, privateComments, vcmPrivateDir);
+        await writeSharedVCM(relativePath, sharedComments, vcmDir);
+        // Manually update split view if it's open (using splitViewManager)
+        await updateSplitViewIfOpen(
+          doc,
+          provider,
+          relativePath,
+          getSplitViewState,
+          (relativePath) => readSharedVCM(relativePath, vcmDir),
+          (relativePath) => readPrivateVCM(relativePath, vcmPrivateDir)
+        );
 
         // Decide whether to hide it in the editor based on the toggle state
         const privateVisible = privateCommentsVisible.get(doc.uri.fsPath) === true;
@@ -961,8 +1039,17 @@ async function activate(context) {
         const sharedExists = await vcmFileExists(vcmDir, relativePath);
         const privateExists = await vcmFileExists(vcmPrivateDir, relativePath);
 
-        let sharedComments = sharedExists ? await readSharedVCM(relativePath, vcmDir) : [];
-        let privateComments = privateExists ? await readPrivateVCM(relativePath, vcmPrivateDir) : [];
+        // If no VCM exists at all, create it first via saveVCM (single creation path)
+        let sharedComments, privateComments;
+        if (!sharedExists && !privateExists) {
+          await saveVCM(doc, true);
+          // Re-read after creation
+          sharedComments = await readSharedVCM(relativePath, vcmDir);
+          privateComments = [];
+        } else {
+          sharedComments = sharedExists ? await readSharedVCM(relativePath, vcmDir) : [];
+          privateComments = privateExists ? await readPrivateVCM(relativePath, vcmPrivateDir) : [];
+        }
 
         // Matching helper (same rule as markPrivate but reversed)
         const isSameComment = (vcmComment, docComment) => {
@@ -1067,7 +1154,8 @@ async function activate(context) {
           provider,
           relativePath,
           getSplitViewState,
-          (relativePath) => readBothVCMs(relativePath, vcmDir, vcmPrivateDir)
+          (relativePath) => readSharedVCM(relativePath, vcmDir),
+          (relativePath) => readPrivateVCM(relativePath, vcmPrivateDir)
         );
 
         vscode.window.showInformationMessage("VCM: Unmarked Private ✅");
@@ -1202,16 +1290,9 @@ async function activate(context) {
           privateCommentsVisible.set(doc.uri.fsPath, false);
           vscode.window.showInformationMessage("VCM: Private comments hidden 🔒");
         } else {
-          // Show private comments - inject them back
-          const isInCommentedMode = isCommentedMap.get(doc.uri.fsPath);
-
-          if (isInCommentedMode) {
-            // In commented mode: current text already has shared/alwaysShow; just add private
-            newText = injectComments(text, privateComments, true);
-          } else {
-            // In clean mode: current text already has alwaysShow; just add private without toggling mode
-            newText = injectComments(text, privateComments, true);
-          }
+            // Show private comments - inject them back
+            // current text already has shared/alwaysShow; just add private
+            newText = injectComments(text, doc.uri.path, privateComments);
 
           privateCommentsVisible.set(doc.uri.fsPath, true);
 
@@ -1227,13 +1308,16 @@ async function activate(context) {
         await vscode.workspace.applyEdit(edit);
         await vscode.commands.executeCommand("workbench.action.files.save");
 
-        // Manually update split view if it's open (private-only)
+        // Update split view efficiently by passing the private visibility state that was just set
+        // This ensures split view stays in sync even with undo/redo
         await updateSplitViewIfOpen(
           doc,
           provider,
           relativePath,
           getSplitViewState,
-          (relativePath) => readPrivateVCM(relativePath, vcmPrivateDir)
+          (relativePath) => readSharedVCM(relativePath, vcmDir),
+          (relativePath) => readPrivateVCM(relativePath, vcmPrivateDir),
+          !currentlyVisible // Pass the state we just toggled to: was visible -> now hidden (false), was hidden -> now visible (true)
         );
 
         // Re-enable sync after a delay to ensure save completes
@@ -1268,53 +1352,68 @@ async function activate(context) {
     const baseName = doc.fileName.split(/[\\/]/).pop();
     const vcmLabel = `VCM_${baseName}`;
 
-    // Load comment data from .vcm file, or extract from current file
-    let sharedComments, privateComments;
-    try {
-      // ✅ shared is read from vcmDir
-      sharedComments = await readSharedVCM(relativePath, vcmDir);
+    // Check if VCM exists first
+    const vcmExists = await vcmFileExists(vcmDir, relativePath);
+    const baseText = doc.getText();
+    let showVersion;
+    let labelType;
 
-      // ✅ private is read from vcmPrivateDir
-      // Make sure private comments carry isPrivate:true in-memory (strip/inject logic relies on this)
-      privateComments = (await readPrivateVCM(relativePath, vcmPrivateDir)).map(c => ({
-        ...c,
-        isPrivate: true,
-      }));
-    } catch {
-      // No .vcm file exists yet - extract and save
-      sharedComments = parseDocComs(doc.getText(), doc.uri.path);
-      privateComments = [];
-      await saveVCM(doc, true); // allowCreate = true for explicit split view action
+    if (!vcmExists) {
+      // NO VCM EXISTS: Always show clean mode (strip all comments from source)
+      const allComments = parseDocComs(baseText, doc.uri.path);
+      showVersion = stripComments(baseText, doc.uri.path, allComments);
+      labelType = "clean";
+
+      // Save VCM for future use
+      await saveVCM(doc, true);
+    } else {
+      // VCM EXISTS: Show opposite of current mode
+      // Detect initial state if not already set
+      if (!isCommentedMap.has(doc.uri.fsPath)) {
+        const initialState = await detectInitialMode(doc, vcmDir);
+        isCommentedMap.set(doc.uri.fsPath, initialState);
+      }
+
+      // Detect private comment visibility if not already set
+      if (!privateCommentsVisible.has(doc.uri.fsPath)) {
+        const privateVisible = await detectPrivateVisibility(doc, relativePath);
+        privateCommentsVisible.set(doc.uri.fsPath, privateVisible);
+      }
+
+      const isInCommentedMode = isCommentedMap.get(doc.uri.fsPath);
+      const keepPrivate = privateCommentsVisible.get(doc.uri.fsPath) === true;
+
+      // Load comments from VCM
+      const sharedComments = await readSharedVCM(relativePath, vcmDir);
+      const privateComments = await readPrivateVCM(relativePath, vcmPrivateDir);
+      const mergedSharedComments = mergeSharedTextCleanMode(sharedComments);
+
+      // Build clean version: always strip shared, conditionally strip private
+      let cleanSharedStripped = stripComments(baseText, doc.uri.path, mergedSharedComments);
+      let clean = keepPrivate
+        ? cleanSharedStripped
+        : stripComments(cleanSharedStripped, doc.uri.path, privateComments);
+
+      // Build commented version: inject shared, conditionally inject private
+      let withComments = injectComments(clean, doc.uri.path, mergedSharedComments);
+
+      if (keepPrivate) {
+        // Parse what's already in the text and build a set of existing comment keys
+        const existing = parseDocComs(withComments, doc.uri.path);
+        const existingKeys = new Set(existing.map(c => buildContextKey(c)));
+
+        // Only inject private comments that are NOT already present
+        const missingPrivate = privateComments.filter(c => !existingKeys.has(buildContextKey(c)));
+
+        if (missingPrivate.length > 0) {
+          withComments = injectComments(withComments, doc.uri.path, missingPrivate);
+        }
+      }
+
+      // Show opposite of current mode
+      showVersion = isInCommentedMode ? clean : withComments;
+      labelType = isInCommentedMode ? "clean" : "with comments";
     }
-
-    // Detect initial state if not already set
-    if (!isCommentedMap.has(doc.uri.fsPath)) {
-      const initialState = await detectInitialMode(doc, vcmDir);
-      isCommentedMap.set(doc.uri.fsPath, initialState);
-    }
-
-    // Detect private comment visibility if not already set
-    if (!privateCommentsVisible.has(doc.uri.fsPath)) {
-      const privateVisible = await detectPrivateVisibility(doc, relativePath);
-      privateCommentsVisible.set(doc.uri.fsPath, privateVisible);
-    }
-
-    // Create clean version and version with comments
-    const text = doc.getText();
-    const keepPrivate = privateCommentsVisible.get(doc.uri.fsPath) === true;
-
-    // Always include ALL comments (shared + private) in the array
-    // Let stripComments and injectComments decide what to do based on keepPrivate flag
-    const allComments = [...sharedComments, ...privateComments];
-    const clean = stripComments(text, doc.uri.path, allComments, keepPrivate);
-    const withComments = injectComments(clean, allComments, keepPrivate);
-
-    // Check the current mode from our state map
-    const isInCommentedMode = isCommentedMap.get(doc.uri.fsPath);
-
-    // If source is in commented mode, show clean; otherwise, show commented
-    const showVersion = isInCommentedMode ? clean : withComments;
-    const labelType = isInCommentedMode ? "clean" : "with comments";
 
     // Insert timestamp before file extension to preserve language detection
     const uniqueLabel = vcmLabel.replace(/(\.[^/.]+)$/, `_${Date.now()}$1`);

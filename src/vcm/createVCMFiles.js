@@ -112,17 +112,8 @@ async function writePrivateVCM(relativePath, comments, vcmPrivateDir) {
   });
 }
 
-/**
- * Write both (thin wrapper).
- * This is your old createVCMFiles behavior, but optional.
- */
-async function writeBothVCMs(relativePath, comments, vcmSharedDir, vcmPrivateDir) {
-  await writeSharedVCM(relativePath, comments, vcmSharedDir);
-  await writePrivateVCM(relativePath, comments, vcmPrivateDir);
-}
 
 module.exports = {
   writeSharedVCM,
   writePrivateVCM,
-  writeBothVCMs,
 };

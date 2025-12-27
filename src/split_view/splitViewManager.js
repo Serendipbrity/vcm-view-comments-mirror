@@ -8,31 +8,50 @@
 
 const vscode = require("vscode");
 const { mergeSharedTextCleanMode } = require("../mergeTextCleanMode");
-const { readBothVCMs } = require("../vcm/readBothVCMs");
 // ---------------------------------------------------------------------------
-// Helper: Generate commented version (for split view)
+// Helper: Generate commented version (for split view when source is in clean mode)
 // ---------------------------------------------------------------------------
-async function generateCommentedSplitView(text, filePath, relativePath, includePrivate, readBothVCMs) {
-  const { stripComments, injectComments } = require("../injectExtractComments");
+async function generateCommentedSplitView(text, filePath, relativePath, includePrivate, readSharedVCM, readPrivateVCM, vcmDir, vcmPrivateDir) {
+  const { injectComments, stripComments } = require("../injectExtractComments");
+  const { parseDocComs } = require("../vcm/parseDocComs");
+
+  let sharedComments, privateComments;
 
   try {
     // Load ALL comments (shared + private) to handle includePrivate correctly
-    const { sharedComments, privateComments } = await readBothVCMs(relativePath);
-
-    // Merge text_cleanMode into text/block (but don't modify the original) for shared comments
-    const mergedSharedComments = mergeSharedTextCleanMode(sharedComments);
-
-    // Combine shared and private comments (all need to be in array for proper filtering)
-    const allComments = [...mergedSharedComments, ...privateComments];
-
-    // Strip ALL comments from source (both shared and private) before injecting
-    // We want a clean slate, then inject only what's needed based on includePrivate
-    const cleanText = stripComments(text, filePath, allComments, false, true);
-    return injectComments(cleanText, allComments, includePrivate);
+    sharedComments = await readSharedVCM(relativePath, vcmDir);
+    privateComments = await readPrivateVCM(relativePath, vcmPrivateDir);
   } catch {
-    // No .vcm file exists
-    return text;
+    // No .vcm file exists yet - extract from current file
+    const allComments = parseDocComs(text, filePath);
+    sharedComments = allComments.filter(c => !c.isPrivate);
+    privateComments = allComments.filter(c => c.isPrivate);
   }
+
+  // Merge text_cleanMode into text/block (but don't modify the original) for shared comments
+  const mergedSharedComments = mergeSharedTextCleanMode(sharedComments);
+
+  // Step 1: Strip ALL comments from source text (clean mode might have new comments typed in)
+  // This ensures we start with truly clean code
+  const allCommentsInSource = parseDocComs(text, filePath);
+  let cleanText = stripComments(text, filePath, allCommentsInSource);
+
+  // Step 2: Inject ALL shared comments from VCM (this is what commented mode would show)
+  let commentedText = injectComments(cleanText, filePath, mergedSharedComments);
+
+  // Step 3: Conditionally inject private comments
+  if (includePrivate) {
+    // Inject ALL private comments (split view shows what commented mode looks like)
+    commentedText = injectComments(commentedText, filePath, privateComments);
+  } else {
+    // Only inject alwaysShow private comments (these persist in clean mode)
+    const alwaysShowPrivate = privateComments.filter(c => c.alwaysShow);
+    if (alwaysShowPrivate.length > 0) {
+      commentedText = injectComments(commentedText, filePath, alwaysShowPrivate);
+    }
+  }
+
+  return commentedText;
 }
 
 // ---------------------------------------------------------------------------
@@ -77,7 +96,7 @@ async function closeSplitView(getSplitViewState, commentJumpIndexCache = null) {
 // ---------------------------------------------------------------------------
 // Setup split view watchers
 // ---------------------------------------------------------------------------
-function setupSplitViewWatchers(context, provider, getSplitViewState, readBothVCMs, detectInitialMode, detectPrivateVisibility, commentJumpIndexCache = null) {
+function setupSplitViewWatchers(context, provider, getSplitViewState, readSharedVCM, readPrivateVCM, detectInitialMode, detectPrivateVisibility, commentJumpIndexCache = null) {
   const { stripComments } = require("../injectExtractComments");
 
   // Split view live sync: update the VCM split view when source file changes
@@ -108,7 +127,7 @@ function setupSplitViewWatchers(context, provider, getSplitViewState, readBothVC
     splitViewUpdateTimeout = setTimeout(async () => {
       try {
         // Get fresh state inside timeout to ensure we have latest references
-        const { isCommentedMap, privateCommentsVisible, vcmDir, tempUri: currentTempUri } = getSplitViewState();
+        const { isCommentedMap, privateCommentsVisible, vcmDir, vcmPrivateDir, tempUri: currentTempUri } = getSplitViewState();
 
         // Get updated text from the document (source of truth)
         const text = doc.getText();
@@ -142,13 +161,23 @@ function setupSplitViewWatchers(context, provider, getSplitViewState, readBothVC
         let showVersion;
         if (actualMode) {
           // Source is in commented mode, show clean in split view
-          // Load VCM comments to preserve alwaysShow metadata
-          const { allComments: vcmComments } = await readBothVCMs(relativePath);
-          showVersion = stripComments(text, doc.uri.path, vcmComments, includePrivate);
+          const sharedComments = await readSharedVCM(relativePath, vcmDir);
+          const privateComments = await readPrivateVCM(relativePath, vcmPrivateDir);
+          const mergedShared = mergeSharedTextCleanMode(sharedComments);
+
+          // Step 1: Strip shared toggleables (non-alwaysShow)
+          const sharedToggleables = mergedShared.filter(c => !c.alwaysShow);
+          let cleanVersion = stripComments(text, doc.uri.path, sharedToggleables);
+
+          // Step 2: If private is OFF, strip private using private VCM (not parsed from doc)
+          if (!includePrivate) {
+            cleanVersion = stripComments(cleanVersion, doc.uri.path, privateComments);
+          }
+
+          showVersion = cleanVersion;
         } else {
           // Source is in clean mode, show commented in split view
-          // Use the same logic as toggling to commented mode
-          showVersion = await generateCommentedSplitView(text, doc.uri.path, relativePath, includePrivate, readBothVCMs);
+          showVersion = await generateCommentedSplitView(text, doc.uri.path, relativePath, includePrivate, readSharedVCM, readPrivateVCM, vcmDir, vcmPrivateDir);
         }
 
         // Update the split view content
@@ -196,27 +225,92 @@ function setupSplitViewWatchers(context, provider, getSplitViewState, readBothVC
 }
 
 // ---------------------------------------------------------------------------
-// Update split view manually (called from toggle private comments)
+// Update split view manually
 // ---------------------------------------------------------------------------
-async function updateSplitViewIfOpen(doc, provider, relativePath, getSplitViewState, readBothVCMs) {
-  const { stripComments } = require("../injectExtractComments");
+// Parameters:
+// - privateVisibilityOverride: if provided (not undefined), use this explicit private visibility state (for toggle private)
+// - Otherwise (undefined): read current state from privateCommentsVisible map (for full rebuild)
+async function updateSplitViewIfOpen(
+  doc,
+  provider,
+  relativePath,
+  getSplitViewState,
+  readSharedVCM,
+  readPrivateVCM,
+  privateVisibilityOverride = undefined
+) {
+  const { stripComments, injectComments } = require("../injectExtractComments");
   const { tempUri, vcmEditor, sourceDocUri, isCommentedMap, privateCommentsVisible } = getSplitViewState();
 
   // Manually update split view if it's open
   if (tempUri && vcmEditor && sourceDocUri && doc.uri.toString() === sourceDocUri.toString()) {
     try {
+      const includePrivate =
+        privateVisibilityOverride !== undefined
+          ? privateVisibilityOverride
+          : (privateCommentsVisible.get(doc.uri.fsPath) === true);
+
+      if (privateVisibilityOverride !== undefined) {
+        // PRIVATE-ONLY UPDATE: operate ONLY on private comments, do NOT parse, do NOT rebuild
+        const currentSplitContent = provider.content.get(tempUri.toString()) || "";
+
+        // We only need private comments for this operation.
+        const { vcmPrivateDir } = getSplitViewState();
+        const privateComments = await readPrivateVCM(relativePath, vcmPrivateDir);
+
+        let updatedSplitContent;
+
+        if (includePrivate) {
+          // Make it idempotent:
+          // 1) remove any existing private comments (prevents double injection)
+          // 2) inject private comments exactly once
+          const withoutPrivate = stripComments(currentSplitContent, doc.uri.path, privateComments);
+          updatedSplitContent = injectComments(withoutPrivate, doc.uri.path, privateComments);
+        } else {
+          // Private OFF: strip private comments only
+          updatedSplitContent = stripComments(currentSplitContent, doc.uri.path, privateComments);
+        }
+
+        provider.update(tempUri, updatedSplitContent);
+        return; // IMPORTANT: do not fall through to full rebuild
+      }
+
+      // FULL UPDATE: Rebuild from VCM (existing behavior)
       const updatedText = doc.getText();
       const isInCommentedMode = isCommentedMap.get(doc.uri.fsPath);
-      const includePrivate = privateCommentsVisible.get(doc.uri.fsPath) === true;
 
       let showVersion;
       if (isInCommentedMode) {
         // Source is in commented mode, show clean in split view
-        const { allComments: vcmComments } = await readBothVCMs(relativePath);
-        showVersion = stripComments(updatedText, doc.uri.path, vcmComments, includePrivate);
+        const { vcmDir, vcmPrivateDir } = getSplitViewState();
+        const sharedComments = await readSharedVCM(relativePath, vcmDir);
+        const privateComments = await readPrivateVCM(relativePath, vcmPrivateDir);
+        const mergedShared = mergeSharedTextCleanMode(sharedComments);
+
+        // Step 1: Strip shared toggleables (non-alwaysShow)
+        const sharedToggleables = mergedShared.filter(c => !c.alwaysShow);
+        let cleanVersion = stripComments(updatedText, doc.uri.path, sharedToggleables);
+
+        // Step 2: If private is OFF, strip private using private VCM (not parsed from doc)
+        if (!includePrivate) {
+      
+          cleanVersion = stripComments(cleanVersion, doc.uri.path, privateComments);
+        }
+
+        showVersion = cleanVersion;
       } else {
         // Source is in clean mode, show commented in split view
-        showVersion = await generateCommentedSplitView(updatedText, doc.uri.path, relativePath, includePrivate);
+        const { vcmDir, vcmPrivateDir } = getSplitViewState();
+        showVersion = await generateCommentedSplitView(
+          updatedText,
+          doc.uri.path,
+          relativePath,
+          includePrivate,
+          readSharedVCM,
+          readPrivateVCM,
+          vcmDir,
+          vcmPrivateDir
+        );
       }
 
       provider.update(tempUri, showVersion);
