@@ -509,12 +509,6 @@ async function activate(context) {
       // Strip shared comments (stripComments automatically preserves alwaysShow)
       newText = stripComments(text, doc.uri.path, sharedComments);
 
-      // If private is OFF, also strip private comments (preserving private visibility state)
-      const privateVisible = privateCommentsVisible.get(doc.uri.fsPath) === true;
-      if (!privateVisible) {
-        const privateComments = await readPrivateVCM(relativePath, vcmPrivateDir);
-        newText = stripComments(newText, doc.uri.path, privateComments);
-      }
 
       // Mark this file as now in clean mode
       isCommentedMap.set(doc.uri.fsPath, false);
@@ -548,14 +542,6 @@ async function activate(context) {
 
           // Inject shared comments
           newText = injectComments(cleanText, doc.uri.path, sharedComments);
-
-          // If private is ON, also inject private comments (preserving private visibility state)
-          const privateVisible = privateCommentsVisible.get(doc.uri.fsPath) === true;
-          if (privateVisible) {
-            const privateComments = await readPrivateVCM(relativePath, vcmPrivateDir);
-            // Only inject private comments that aren't already present (avoid duplicates with alwaysShow)
-            newText = injectMissingPrivateComments(newText, doc.uri.path, privateComments);
-          }
 
           // Mark that we just injected from VCM - don't re-extract on next save
           justInjectedFromVCM.add(doc.uri.fsPath);
