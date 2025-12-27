@@ -25,6 +25,8 @@ const { updateAlwaysShow } = require("./src/alwaysShow");
 const { mergeSharedTextCleanMode } = require("./src/mergeTextCleanMode");
 const { findCommentAtCursor } = require("./src/findCommentAtCursor");
 const { getCommentText } = require("./src/getCommentText");
+const { isSameComment } = require("./src/isSameComment");
+const { injectMissingPrivateComments } = require("./src/injectMissingPrivateComments");
 
 // Global state variables for the extension
 let vcmEditor;           // Reference to the VCM split view editor
@@ -538,13 +540,7 @@ async function activate(context) {
         if (privateVisible) {
           const privateComments = await readPrivateVCM(relativePath, vcmPrivateDir);
           // Only inject private comments that aren't already present (avoid duplicates with alwaysShow)
-          const { parseDocComs } = require("./src/vcm/parseDocComs");
-          const existing = parseDocComs(newText, doc.uri.path);
-          const existingKeys = new Set(existing.map(c => buildContextKey(c)));
-          const missingPrivate = privateComments.filter(c => !existingKeys.has(buildContextKey(c)));
-          if (missingPrivate.length > 0) {
-            newText = injectComments(newText, doc.uri.path, missingPrivate);
-          }
+          newText = injectMissingPrivateComments(newText, doc.uri.path, privateComments);
         }
 
         // Save ONLY the merged shared comments back to shared VCM (don't mix in private)
@@ -575,13 +571,7 @@ async function activate(context) {
           if (privateVisible) {
             const privateComments = await readPrivateVCM(relativePath, vcmPrivateDir);
             // Only inject private comments that aren't already present (avoid duplicates with alwaysShow)
-            const { parseDocComs } = require("./src/vcm/parseDocComs");
-            const existing = parseDocComs(newText, doc.uri.path);
-            const existingKeys = new Set(existing.map(c => buildContextKey(c)));
-            const missingPrivate = privateComments.filter(c => !existingKeys.has(buildContextKey(c)));
-            if (missingPrivate.length > 0) {
-              newText = injectComments(newText, doc.uri.path, missingPrivate);
-            }
+            newText = injectMissingPrivateComments(newText, doc.uri.path, privateComments);
           }
 
           // Mark that we just injected from VCM - don't re-extract on next save
@@ -857,31 +847,6 @@ async function activate(context) {
           privateComments = privateExists ? await readPrivateVCM(relativePath, vcmPrivateDir) : [];
         }
 
-        // Helper: compare doc comment to a VCM comment safely
-        // - Always match by context key
-        // - For inline: also require exact text match when available
-        // - For block: also require block text match when available
-        const isSameComment = (vcmComment, docComment) => {
-          if (buildContextKey(vcmComment) !== buildContextKey(docComment)) return false;
-
-          if (docComment.type === "inline") {
-            // If either side lacks text, fall back to key-only
-            if (typeof docComment.text !== "string" || typeof vcmComment.text !== "string") return true;
-            return vcmComment.text === docComment.text;
-          }
-
-          if (docComment.type === "block") {
-            const docBlockText = getCommentText(docComment);
-            const vcmBlockText = getCommentText(vcmComment);
-
-            // If either block is missing, fall back to key-only
-            if (!docBlockText || !vcmBlockText) return true;
-            return docBlockText === vcmBlockText;
-          }
-
-          return true;
-        };
-
         // 1) REMOVE from shared (we are moving it out)
         //    Only remove comments that match this exact one (key + text/block when possible)
         sharedComments = sharedComments.filter((c) => !isSameComment(c, commentAtCursor));
@@ -1021,28 +986,6 @@ async function activate(context) {
           privateComments = privateExists ? await readPrivateVCM(relativePath, vcmPrivateDir) : [];
         }
 
-        // Matching helper (same rule as markPrivate but reversed)
-        const isSameComment = (vcmComment, docComment) => {
-          if (buildContextKey(vcmComment) !== buildContextKey(docComment)) return false;
-
-          if (docComment.type === "inline") {
-            // Prefer exact text match when possible (avoids collisions)
-            if (typeof docComment.text !== "string" || typeof vcmComment.text !== "string") return true;
-            return vcmComment.text === docComment.text;
-          }
-
-          if (docComment.type === "block") {
-            const docBlockText = getCommentText(docComment);
-            const vcmBlockText = getCommentText(vcmComment);
-
-            // If either block is missing, fall back to key-only
-            if (!docBlockText || !vcmBlockText) return true;
-            return docBlockText === vcmBlockText;
-          }
-
-          return true;
-        };
-
         // 1) Ensure it exists in private (otherwise it's not private)
         const existsInPrivate = privateComments.some((c) => isSameComment(c, commentAtCursor));
         if (!existsInPrivate) {
@@ -1067,7 +1010,6 @@ async function activate(context) {
 
         // --- Doc visibility logic ---
         const isInCommentedMode = isCommentedMap.get(doc.uri.fsPath) === true;
-        const privateVisible = privateCommentsVisible.get(doc.uri.fsPath) === true;
 
         // After unmarking:
         // - If shared comments are visible in the current mode, DO NOT delete from doc.
