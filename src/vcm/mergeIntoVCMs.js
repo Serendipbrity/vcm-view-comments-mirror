@@ -1,4 +1,5 @@
 const { buildContextKey } = require("../buildContextKey");
+const { getCommentText } = require("../getCommentText");
 
 // ============================================================================
 // mergeIntoVCMs() determines:
@@ -57,7 +58,7 @@ function mergeIntoVCMs({
         if (!vcmByKey.has(key)) vcmByKey.set(key, []);
         vcmByKey.get(key).push(c);
 
-        const textKey = c.text || (c.block ? c.block.map(b => b.text).join("\n") : "");
+        const textKey = getCommentText(c);
         if (textKey && !vcmByText.has(textKey)) vcmByText.set(textKey, c);
       }
 
@@ -66,7 +67,7 @@ function mergeIntoVCMs({
       // Update matched VCM comments in place
       for (const current of docComments) {
         const key = buildContextKey(current);
-        const currentText = current.text || (current.block ? current.block.map(b => b.text).join("\n") : "");
+        const currentText = getCommentText(current);
 
         let existing = null;
         const candidates = vcmByKey.get(key) || [];
@@ -109,9 +110,7 @@ function mergeIntoVCMs({
         }
         vcmComByKEY.get(key).push(comment);
 
-        const textKey =
-          comment.text ||
-          (comment.block ? comment.block.map((b) => b.text).join("\n") : "");
+        const textKey = getCommentText(comment);
         if (textKey && !vcmComByTEXT.has(textKey)) {
           vcmComByTEXT.set(textKey, comment);
         }
@@ -123,9 +122,7 @@ function mergeIntoVCMs({
       // Update matched VCM comments in place
       for (const current of docComments) {
         const key = buildContextKey(current);
-        const currentText =
-          current.text ||
-          (current.block ? current.block.map((b) => b.text).join("\n") : "");
+        const currentText = getCommentText(current);
 
         let existing = null;
 
@@ -193,9 +190,7 @@ function mergeIntoVCMs({
       // Build map by text for matching (handles cut/paste where anchor changes)
       const vcmComByTEXT = new Map();
       for (const existing of vcmComments) {
-        const textKey =
-          existing.text ||
-          (existing.block ? existing.block.map((b) => b.text).join("\n") : "");
+        const textKey = getCommentText(existing);
         if (textKey && !vcmComByTEXT.has(textKey)) {
           vcmComByTEXT.set(textKey, existing);
         }
@@ -207,9 +202,7 @@ function mergeIntoVCMs({
       // Process current comments (typed in clean mode or commented mode)
       for (const current of docComments) {
         const key = buildContextKey(current);
-        const currentText =
-          current.text ||
-          (current.block ? current.block.map((b) => b.text).join("\n") : "");
+        const currentText = getCommentText(current);
 
         // Try to match by anchor first (for existing private VCM comments)
         let existing = null;
@@ -264,9 +257,7 @@ function mergeIntoVCMs({
       // Build map by original VCM text/block for matching (matches unedited comments)
       const vcmComByTEXT = new Map();
       for (const existing of vcmComments) {
-        const textKey =
-          existing.text ||
-          (existing.block ? existing.block.map((b) => b.text).join("\n") : "");
+        const textKey = getCommentText(existing);
         if (textKey && !vcmComByTEXT.has(textKey)) {
           vcmComByTEXT.set(textKey, existing);
         }
@@ -294,9 +285,7 @@ function mergeIntoVCMs({
       // Process current comments (typed in clean mode)
       for (const current of docComments) {
         const key = buildContextKey(current);
-        const currentText =
-          current.text ||
-          (current.block ? current.block.map((b) => b.text).join("\n") : "");
+        const currentText = getCommentText(current);
 
         // Process as a comment for this VCM
         let existing = null;
@@ -361,10 +350,8 @@ function mergeIntoVCMs({
                 existing.text_cleanMode = null;
               }
             } else if (current.type === "block") {
-              const existingTexts =
-                existing.block?.map((b) => b.text).join("\n") || "";
-              const currentTexts =
-                current.block?.map((b) => b.text).join("\n") || "";
+              const existingTexts = getCommentText(existing);
+              const currentTexts = getCommentText(current);
               const blocksIdentical = existingTexts === currentTexts;
 
               if (!blocksIdentical) {

@@ -24,6 +24,7 @@ const { findInlineCommentStart, isolateCodeLine, findPrevNextCodeLine } = requir
 const { updateAlwaysShow } = require("./src/alwaysShow");
 const { mergeSharedTextCleanMode } = require("./src/mergeTextCleanMode");
 const { findCommentAtCursor } = require("./src/findCommentAtCursor");
+const { getCommentText } = require("./src/getCommentText");
 
 // Global state variables for the extension
 let vcmEditor;           // Reference to the VCM split view editor
@@ -310,7 +311,7 @@ async function activate(context) {
     const privateKeys = new Set(privateVCMComments.map(c => buildContextKey(c)));
     const privateTextMap = new Map();
     for (const c of privateVCMComments) {
-      const textKey = c.text || (c.block ? c.block.map(b => b.text).join("\n") : "");
+      const textKey = getCommentText(c);
       if (textKey) privateTextMap.set(textKey, c);
     }
 
@@ -325,7 +326,7 @@ async function activate(context) {
       if (privateKeys.has(buildContextKey(c))) return false;
 
       // Also check by text content (in case code moved and key changed)
-      const currentText = c.text || (c.block ? c.block.map(b => b.text).join("\n") : "");
+      const currentText = getCommentText(c);
       if (currentText && privateTextMap.has(currentText)) return false;
 
       return true; // Not private, include in shared
@@ -372,7 +373,7 @@ async function activate(context) {
         if (privateKeys.has(buildContextKey(c))) return true;
 
         // Also check by text content (in case code moved and key changed)
-        const currentText = c.text || (c.block ? c.block.map(b => b.text).join("\n") : "");
+        const currentText = getCommentText(c);
         if (currentText && privateTextMap.has(currentText)) return true;
 
         return false; // Not private, don't include
@@ -870,12 +871,8 @@ async function activate(context) {
           }
 
           if (docComment.type === "block") {
-            const docBlockText = Array.isArray(docComment.block)
-              ? docComment.block.map((b) => b.text).join("\n")
-              : "";
-            const vcmBlockText = Array.isArray(vcmComment.block)
-              ? vcmComment.block.map((b) => b.text).join("\n")
-              : "";
+            const docBlockText = getCommentText(docComment);
+            const vcmBlockText = getCommentText(vcmComment);
 
             // If either block is missing, fall back to key-only
             if (!docBlockText || !vcmBlockText) return true;
@@ -1035,12 +1032,8 @@ async function activate(context) {
           }
 
           if (docComment.type === "block") {
-            const docBlockText = Array.isArray(docComment.block)
-              ? docComment.block.map((b) => b.text).join("\n")
-              : "";
-            const vcmBlockText = Array.isArray(vcmComment.block)
-              ? vcmComment.block.map((b) => b.text).join("\n")
-              : "";
+            const docBlockText = getCommentText(docComment);
+            const vcmBlockText = getCommentText(vcmComment);
 
             // If either block is missing, fall back to key-only
             if (!docBlockText || !vcmBlockText) return true;

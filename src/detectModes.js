@@ -1,4 +1,5 @@
 const { buildContextKey } = require("./buildContextKey");
+const { getCommentText } = require("./getCommentText");
 
 function createDetectors({
   readSharedVCM,
@@ -100,11 +101,7 @@ function createDetectors({
       // Only check the first private comment for efficiency (if one is visible, they all should be)
       const firstPrivate = privateComments[0];
       const firstPrivateKey = buildContextKey(firstPrivate);
-      const firstPrivateText =
-        firstPrivate.text ||
-        (firstPrivate.block
-          ? firstPrivate.block.map((b) => b.text).join("\n")
-          : "");
+      const firstPrivateText = getCommentText(firstPrivate);
 
       // Check if the first private comment exists in current document
       for (const current of docComments) {
@@ -117,9 +114,7 @@ function createDetectors({
 
         // Match by text (in case anchor changed)
         if (firstPrivateText) {
-          const currentText =
-            current.text ||
-            (current.block ? current.block.map((b) => b.text).join("\n") : "");
+          const currentText = getCommentText(current);
           if (currentText === firstPrivateText) {
             return true; // Found the first private comment by text match
           }
