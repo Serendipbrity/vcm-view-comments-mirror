@@ -29,6 +29,8 @@ const { isSameComment } = require("./src/utils_copycode/isSameComment");
 const { injectMissingPrivateComments } = require("./src/helpers_subroutines/injectMissingPrivateComments");
 const { isAlwaysShow } = require("./src/helpers_subroutines/alwaysShow");
 const { generateCommentedVersion } = require("./src/helpers_subroutines/generateCommentedVersion");
+const { commentedModeBehavior } = require("./src/helpers_subroutines/commentedModeBehavior");
+const { cleanModeBehavior } = require("./src/helpers_subroutines/cleanModeBehavior");
 
 // Global state variables for the extension
 let vcmEditor;           // Reference to the VCM split view editor
@@ -52,6 +54,7 @@ let isCommentedMap = new Map(); // Cached current mode: clean vs commented.true 
 // fast lookups. has() is O(1)
 // Hash based. Not index based/accessed
 let justInjectedFromVCM = new Set(); // Track files that just had VCM comments injected (don't re-extract)
+let justInjectedFromPrivateVCM = new Set(); // Track files that just had private VCM comments injected/stripped (don't re-extract)
 let privateCommentsVisible = new Map(); // Track private comment visibility per file: true = visible, false = hidden
 
 
@@ -283,6 +286,13 @@ async function activate(context) {
       justInjectedFromVCM.delete(doc.uri.fsPath);
     }
 
+    // Check if we just injected/stripped private comments from VCM
+    // (this flag prevents re-extracting immediately after private toggle)
+    const wasJustInjectedPrivate = justInjectedFromPrivateVCM.has(doc.uri.fsPath);
+    if (wasJustInjectedPrivate) {
+      justInjectedFromPrivateVCM.delete(doc.uri.fsPath);
+    }
+
     const text = doc.getText();
 
     // ✅ READ SHARED + PRIVATE (shared save needs private only to exclude)
@@ -369,7 +379,7 @@ async function activate(context) {
     // ----------------------------
     const privateVisibleNow = privateCommentsVisible.get(doc.uri.fsPath) === true;
 
-    if (privateExists || privateVisibleNow) {
+    if (privateVisibleNow) {
       // Filter to only private comments from docComments for private processing
       // Match by BOTH context key AND text content (handles code movement)
       const privateDocComments = docComments.filter(c => {
@@ -384,11 +394,11 @@ async function activate(context) {
       });
 
       let finalPrivate = mergeIntoVCMs({
-        isCommented,
+        isCommented: privateVisibleNow,
         docComments: privateDocComments,
         vcmComments: privateVCMComments,
         isPrivateMode: true,
-        wasJustInjected,
+        wasJustInjected: wasJustInjectedPrivate,
       });
 
       // CRITICAL: DO NOT filter out empty private comments
@@ -1078,20 +1088,37 @@ async function activate(context) {
 
         let newText;
         if (currentlyVisible) {
-          // Hide private comments - remove ONLY private comments using anchor + context hashes
-          newText = stripComments(text, doc.uri.path, privateComments);
+          // Toggling OFF: Private uses shared clean-mode behavior
+          const config = vscode.workspace.getConfiguration("vcm");
+          newText = await cleanModeBehavior({
+            doc,
+            text,
+            relativePath,
+            config,
+            saveVCM,
+            vcmFileExists,
+            vcmDir: vcmPrivateDir,
+            readVCM: readPrivateVCM
+          });
+
           privateCommentsVisible.set(doc.uri.fsPath, false);
+          justInjectedFromPrivateVCM.add(doc.uri.fsPath);
           vscode.window.showInformationMessage("VCM: Private comments hidden 🔒");
         } else {
-            // Show private comments - inject them back
-            // current text already has shared/alwaysShow; just add private
-            newText = injectComments(text, doc.uri.path, privateComments);
+          // Toggling ON: Private uses shared commented-mode behavior
+          newText = await commentedModeBehavior({
+            doc,
+            text,
+            relativePath,
+            saveVCM,
+            readVCM: readPrivateVCM,
+            writeVCM: writePrivateVCM,
+            vcmDir: vcmPrivateDir,
+            injectFn: injectMissingPrivateComments
+          });
 
           privateCommentsVisible.set(doc.uri.fsPath, true);
-
-          // Mark that we just injected from VCM so saveVCM doesn't re-extract these as shared comments
-          justInjectedFromVCM.add(doc.uri.fsPath);
-
+          justInjectedFromPrivateVCM.add(doc.uri.fsPath);
           vscode.window.showInformationMessage("VCM: Private comments visible 🔓");
         }
 
