@@ -240,6 +240,7 @@ async function activate(context) {
     vcmPrivateDir,
     parseDocComs,
     vscode,
+    vcmFileExists,
   });
 
   // ============================================================================
@@ -602,10 +603,10 @@ async function activate(context) {
         }
 
         // Ensure VCM exists before modifying metadata
-        const sharedComments = await readSharedVCM(relativePath, vcmDir);
+        const sharedVCMExists = await vcmFileExists(vcmDir, relativePath);
 
         // If no shared VCM exists - create it first via saveVCM
-        if (!sharedComments || sharedComments.length === 0) {
+        if (!sharedVCMExists) {
           await saveVCM(doc, true); // Single creation path
           // Re-read after creation
           const newlyCreatedComments = await readSharedVCM(relativePath, vcmDir);
@@ -686,12 +687,14 @@ async function activate(context) {
           return;
         }
 
-        const allComments = await readSharedVCM(relativePath, vcmDir);
+        const sharedVCMExists = await vcmFileExists(vcmDir, relativePath);
 
-        if (allComments.length === 0) {
+        if (!sharedVCMExists) {
           vscode.window.showWarningMessage("VCM: No .vcm file found.");
           return;
         }
+
+        const allComments = await readSharedVCM(relativePath, vcmDir);
 
         // Build context key for the comment at cursor
         const currentKey = buildContextKey(commentAtCursor);
@@ -1072,10 +1075,10 @@ async function activate(context) {
       const relativePath = vscode.workspace.asRelativePath(doc.uri);
 
       try {
-        // Load private comments from private VCM file
-        const privateComments = await readPrivateVCM(relativePath, vcmPrivateDir);
+        // Check if private VCM file exists
+        const privateVCMExists = await vcmFileExists(vcmPrivateDir, relativePath);
 
-        if (privateComments.length === 0) {
+        if (!privateVCMExists) {
           vscode.window.showInformationMessage("VCM: No private comments found in this file.");
           vcmSyncEnabled = true;
           return;

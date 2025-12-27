@@ -9,6 +9,7 @@ function createDetectors({
   vcmPrivateDir,
   parseDocComs,
   vscode,
+  vcmFileExists,
 }) {
 
   // SHARED MODE DETECTION: clean vs commented
@@ -17,14 +18,16 @@ function createDetectors({
     const relativePath = vscode.workspace.asRelativePath(doc.uri);
 
     try {
-      const sharedComments = await readSharedVCM(relativePath, vcmDir);
+      const sharedVCMExists = await vcmFileExists(vcmDir, relativePath);
 
       // No shared VCM → user never used clean/commented.
       // Just say "commented" if the file has any comments at all.
-      if (sharedComments.length === 0) {
+      if (!sharedVCMExists) {
         const vcmObjects = parseDocComs(doc.getText(), doc.uri.path);
         return vcmObjects.length > 0;
       }
+
+      const sharedComments = await readSharedVCM(relativePath, vcmDir);
 
       // Toggleable shared = shared comments that are NOT alwaysShow.
       const toggleableShared = sharedComments.filter((c) => !isAlwaysShow(c));
@@ -84,10 +87,18 @@ function createDetectors({
   // This is a FALLBACK - should only be used when state is not in the map
   async function detectPrivateVisibility(doc, relativePath) {
     try {
+      // Check if private VCM file exists
+      const privateVCMExists = await vcmFileExists(vcmPrivateDir, relativePath);
+
+      // If no private VCM file exists, return false (nothing to show)
+      if (!privateVCMExists) {
+        return false;
+      }
+
       // Load private comments from VCM
       const privateComments = await readPrivateVCM(relativePath, vcmPrivateDir);
 
-      // If no private comments exist, return false (nothing to show)
+      // If VCM exists but has no comments, return false (nothing to show)
       if (!privateComments || privateComments.length === 0) {
         return false;
       }
