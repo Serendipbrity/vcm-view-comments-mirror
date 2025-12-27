@@ -3,6 +3,7 @@ const { hashLine } = require("./hash");
 const { isolateCodeLine, findInlineCommentStart } = require("./lineUtils");
 const { parseDocComs } = require("./vcm/parseDocComs");
 const { buildContextKey } = require("./buildContextKey");
+const { isAlwaysShow } = require("./alwaysShow");
 
 /**
  * Inject ONLY the provided comments (except alwaysShow, which is never injected).
@@ -17,7 +18,7 @@ function injectComments(cleanText, filePath, comments = []) {
   const commentMarkers = getCommentMarkersForFile(filePath);
 
   // Never inject alwaysShow (those live physically in the file)
-  const commentsToInject = (comments || []).filter(c => !c.alwaysShow);
+  const commentsToInject = (comments || []).filter(c => !isAlwaysShow(c));
 
   // Create an empty Map to link each line’s unique hash → all positions in the file where that line exists. 
   // (handles duplicates)
@@ -220,7 +221,7 @@ function stripComments(text, filePath, vcmComments = []) {
   // alwaysShow is never stripped, ever.
   const stripKeys = new Set(
     (vcmComments || [])
-      .filter(c => !c.alwaysShow)                // never target alwaysShow
+      .filter(c => !isAlwaysShow(c))             // never target alwaysShow
       .map(c => buildContextKey(c))              // stable identity
   );
 

@@ -1,5 +1,6 @@
 const { buildContextKey } = require("./buildContextKey");
 const { getCommentText } = require("./getCommentText");
+const { isAlwaysShow } = require("./alwaysShow");
 
 function createDetectors({
   readSharedVCM,
@@ -9,9 +10,6 @@ function createDetectors({
   parseDocComs,
   vscode,
 }) {
-
-  const isAlwaysShow = (c) =>
-    c.alwaysShow || (c.block && c.block.some((b) => b.alwaysShow));
 
   // SHARED MODE DETECTION: clean vs commented
   async function detectInitialMode(doc) {

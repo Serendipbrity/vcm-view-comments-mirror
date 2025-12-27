@@ -1,5 +1,6 @@
 const { buildContextKey } = require("../buildContextKey");
 const { getCommentText } = require("../getCommentText");
+const { isAlwaysShow } = require("../alwaysShow");
 
 // ============================================================================
 // mergeIntoVCMs() determines:
@@ -324,7 +325,7 @@ function mergeIntoVCMs({
 
         if (existing) {
           // Special handling for alwaysShow comments: update text/block directly (like commented mode)
-          if (existing.alwaysShow) {
+          if (isAlwaysShow(existing)) {
             // Update content directly (no text_cleanMode for alwaysShow)
             existing.text = current.text;
             existing.block = current.block;

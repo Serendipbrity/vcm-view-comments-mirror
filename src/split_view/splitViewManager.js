@@ -8,6 +8,7 @@
 
 const vscode = require("vscode");
 const { mergeSharedTextCleanMode } = require("../mergeTextCleanMode");
+const { isAlwaysShow } = require("../alwaysShow");
 // ---------------------------------------------------------------------------
 // Helper: Generate commented version (for split view when source is in clean mode)
 // ---------------------------------------------------------------------------
@@ -45,7 +46,7 @@ async function generateCommentedSplitView(text, filePath, relativePath, includeP
     commentedText = injectComments(commentedText, filePath, privateComments);
   } else {
     // Only inject alwaysShow private comments (these persist in clean mode)
-    const alwaysShowPrivate = privateComments.filter(c => c.alwaysShow);
+    const alwaysShowPrivate = privateComments.filter(c => isAlwaysShow(c));
     if (alwaysShowPrivate.length > 0) {
       commentedText = injectComments(commentedText, filePath, alwaysShowPrivate);
     }
@@ -166,7 +167,7 @@ function setupSplitViewWatchers(context, provider, getSplitViewState, readShared
           const mergedShared = mergeSharedTextCleanMode(sharedComments);
 
           // Step 1: Strip shared toggleables (non-alwaysShow)
-          const sharedToggleables = mergedShared.filter(c => !c.alwaysShow);
+          const sharedToggleables = mergedShared.filter(c => !isAlwaysShow(c));
           let cleanVersion = stripComments(text, doc.uri.path, sharedToggleables);
 
           // Step 2: If private is OFF, strip private using private VCM (not parsed from doc)
@@ -288,7 +289,7 @@ async function updateSplitViewIfOpen(
         const mergedShared = mergeSharedTextCleanMode(sharedComments);
 
         // Step 1: Strip shared toggleables (non-alwaysShow)
-        const sharedToggleables = mergedShared.filter(c => !c.alwaysShow);
+        const sharedToggleables = mergedShared.filter(c => !isAlwaysShow(c));
         let cleanVersion = stripComments(updatedText, doc.uri.path, sharedToggleables);
 
         // Step 2: If private is OFF, strip private using private VCM (not parsed from doc)

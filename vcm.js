@@ -27,6 +27,7 @@ const { findCommentAtCursor } = require("./src/findCommentAtCursor");
 const { getCommentText } = require("./src/getCommentText");
 const { isSameComment } = require("./src/isSameComment");
 const { injectMissingPrivateComments } = require("./src/injectMissingPrivateComments");
+const { isAlwaysShow } = require("./src/alwaysShow");
 
 // Global state variables for the extension
 let vcmEditor;           // Reference to the VCM split view editor
@@ -505,14 +506,14 @@ async function activate(context) {
       const sharedComments = await readSharedVCM(relativePath, vcmDir);
 
       // Strip shared toggleable comments (never strip alwaysShow)
-      const sharedToggleables = sharedComments.filter(c => !c.alwaysShow);
+      const sharedToggleables = sharedComments.filter(c => !isAlwaysShow(c));
       newText = stripComments(text, doc.uri.path, sharedToggleables);
 
       // If private is OFF, also strip private comments (preserving private visibility state)
       const privateVisible = privateCommentsVisible.get(doc.uri.fsPath) === true;
       if (!privateVisible) {
         const privateComments = await readPrivateVCM(relativePath, vcmPrivateDir);
-        const privateToggleables = privateComments.filter(c => !c.alwaysShow);
+        const privateToggleables = privateComments.filter(c => !isAlwaysShow(c));
         newText = stripComments(newText, doc.uri.path, privateToggleables);
       }
 
@@ -720,7 +721,7 @@ async function activate(context) {
         // Search for comment with matching context key and remove alwaysShow
         let found = false;
         for (const c of allComments) {
-          if (buildContextKey(c) === currentKey && c.alwaysShow) {
+          if (buildContextKey(c) === currentKey && isAlwaysShow(c)) {
             delete c.alwaysShow;
             found = true;
             break;
