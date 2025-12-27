@@ -14,7 +14,7 @@ const { hashLine } = require("./src/utils_copycode/hash");
 const { injectComments, stripComments } = require("./src/helpers_subroutines/injectExtractComments");
 const { parseDocComs } = require("./src/vcm/utils_copycode/parseDocComs");
 const { mergeIntoVCMs } = require("./src/vcm/helpers_subroutines/mergeIntoVCMs");
-const { createDetectors } = require("./src/detectModes");
+const { createDetectors } = require("./src/helpers_subroutines/detectModes");
 const { buildContextKey } = require("./src/utils_copycode/buildContextKey");
 const { setupSplitViewWatchers, updateSplitViewIfOpen, closeSplitView } = require("./src/split_view/splitViewManager");
 const { vcmFileExists } = require("./src/vcm/utils_copycode/vcmFileExists");
@@ -28,6 +28,7 @@ const { getCommentText } = require("./src/utils_copycode/getCommentText");
 const { isSameComment } = require("./src/utils_copycode/isSameComment");
 const { injectMissingPrivateComments } = require("./src/helpers_subroutines/injectMissingPrivateComments");
 const { isAlwaysShow } = require("./src/helpers_subroutines/alwaysShow");
+const { generateCommentedVersion } = require("./src/helpers_subroutines/generateCommentedVersion");
 
 // Global state variables for the extension
 let vcmEditor;           // Reference to the VCM split view editor
