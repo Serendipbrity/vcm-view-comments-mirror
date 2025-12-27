@@ -20,7 +20,7 @@ const { setupSplitViewWatchers, updateSplitViewIfOpen, closeSplitView } = requir
 const { vcmFileExists } = require("./src/vcm/utils_copycode/vcmFileExists");
 const { readBothVCMs, readSharedVCM, readPrivateVCM } = require("./src/vcm/utils_copycode/readBothVCMs");
 const { writeSharedVCM, writePrivateVCM } = require("./src/vcm/helpers_subroutines/createVCMFiles");
-const { findInlineCommentStart, isolateCodeLine, findPrevNextCodeLine } = require("./src/utils_copycode/lineUtils");
+const { findInlineCommentStart, isolateCodeLine } = require("./src/utils_copycode/lineUtils");
 const { updateAlwaysShow } = require("./src/helpers_subroutines/alwaysShow");
 const { mergeSharedTextCleanMode } = require("./src/utils_copycode/mergeTextCleanMode");
 const { findCommentAtCursor } = require("./src/utils_copycode/findCommentAtCursor");
@@ -506,16 +506,14 @@ async function activate(context) {
       // Load shared comments for stripping
       const sharedComments = await readSharedVCM(relativePath, vcmDir);
 
-      // Strip shared toggleable comments (never strip alwaysShow)
-      const sharedToggleables = sharedComments.filter(c => !isAlwaysShow(c));
-      newText = stripComments(text, doc.uri.path, sharedToggleables);
+      // Strip shared comments (stripComments automatically preserves alwaysShow)
+      newText = stripComments(text, doc.uri.path, sharedComments);
 
       // If private is OFF, also strip private comments (preserving private visibility state)
       const privateVisible = privateCommentsVisible.get(doc.uri.fsPath) === true;
       if (!privateVisible) {
         const privateComments = await readPrivateVCM(relativePath, vcmPrivateDir);
-        const privateToggleables = privateComments.filter(c => !isAlwaysShow(c));
-        newText = stripComments(newText, doc.uri.path, privateToggleables);
+        newText = stripComments(newText, doc.uri.path, privateComments);
       }
 
       // Mark this file as now in clean mode
@@ -1095,88 +1093,7 @@ async function activate(context) {
         let newText;
         if (currentlyVisible) {
           // Hide private comments - remove ONLY private comments using anchor + context hashes
-          const privateKeys = new Set(privateComments.map(c => buildContextKey(c)));
-
-          // Extract current comments to identify which ones are private
-          const docComments = parseDocComs(text, doc.uri.path);
-
-          // Build a map of private comments by type and anchor for removal
-          const privateBlocksToRemove = [];
-
-          for (const current of docComments) {
-            const currentKey = buildContextKey(current);
-            if (privateKeys.has(currentKey)) {
-              if (current.type === "block") {
-                privateBlocksToRemove.push(current);
-              }
-            }
-          }
-
-          // Remove private comments from the text
-          const lines = text.split("\n");
-          const linesToRemove = new Set();
-
-          // Mark block comment lines for removal
-          for (const block of privateBlocksToRemove) {
-            if (block.block) {
-              for (const blockLine of block.block) {
-                linesToRemove.add(blockLine.commentedLineIndex);
-              }
-            }
-          }
-
-          // Process lines: filter out block comments and strip inline comments
-          const resultLines = [];
-          const commentMarkers = getCommentMarkersForFile(doc.uri.path);
-          for (let i = 0; i < lines.length; i++) {
-            // Skip lines that are part of private block comments
-            if (linesToRemove.has(i)) continue;
-
-            let line = lines[i];
-
-            // Find the start of an inline comment using real markers
-            let commentStartIdx = -1;
-            for (const marker of commentMarkers) {
-              const idx = line.indexOf(marker);
-              if (idx > 0 && line[idx - 1].match(/\s/)) {
-                commentStartIdx = idx - 1; // include the whitespace before marker
-                break;
-              }
-            }
-
-            if (commentStartIdx >= 0) {
-              // Code-only portion
-              const anchorBase = isolateCodeLine(line, commentMarkers);
-
-              // Find prev/next CODE lines (skip blank + comment-only lines)
-              const isCommentOnlyLine = (l) => {
-                const t = l.trim();
-                if (!t) return false;
-                return commentMarkers.some(m => t.startsWith(m));
-              };
-
-              const { prevIdx, nextIdx } = findPrevNextCodeLine(i, lines, isCommentOnlyLine);
-
-              // Use isolateCodeLine for prev/next hashes to match parseDocComs
-              const currentObj = {
-                type: "inline",
-                anchor: hashLine(anchorBase, 0),
-                prevHash: prevIdx >= 0 ? hashLine(isolateCodeLine(lines[prevIdx], commentMarkers), 0) : null,
-                nextHash: nextIdx >= 0 ? hashLine(isolateCodeLine(lines[nextIdx], commentMarkers), 0) : null,
-              };
-
-              const currentKey = buildContextKey(currentObj);
-
-              // If this line corresponds to a private inline comment, strip it
-              if (privateKeys.has(currentKey)) {
-                line = line.substring(0, commentStartIdx).trimEnd();
-              }
-            }
-
-            resultLines.push(line);
-          }
-
-          newText = resultLines.join("\n");
+          newText = stripComments(text, doc.uri.path, privateComments);
           privateCommentsVisible.set(doc.uri.fsPath, false);
           vscode.window.showInformationMessage("VCM: Private comments hidden 🔒");
         } else {

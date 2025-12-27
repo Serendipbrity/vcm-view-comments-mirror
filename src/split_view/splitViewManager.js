@@ -8,7 +8,6 @@
 
 const vscode = require("vscode");
 const { mergeSharedTextCleanMode } = require("../utils_copycode/mergeTextCleanMode");
-const { isAlwaysShow } = require("../helpers_subroutines/alwaysShow");
 const { injectComments, stripComments } = require("../helpers_subroutines/injectExtractComments");
 const { generateCommentedVersion } = require("../helpers_subroutines/generateCommentedVersion");
 // ---------------------------------------------------------------------------
@@ -128,9 +127,8 @@ function setupSplitViewWatchers(context, provider, getSplitViewState, readShared
           const privateComments = await readPrivateVCM(relativePath, vcmPrivateDir);
           const mergedShared = mergeSharedTextCleanMode(sharedComments);
 
-          // Step 1: Strip shared toggleables (non-alwaysShow)
-          const sharedToggleables = mergedShared.filter(c => !isAlwaysShow(c));
-          let cleanVersion = stripComments(text, doc.uri.path, sharedToggleables);
+          // Step 1: Strip shared comments (stripComments automatically preserves alwaysShow)
+          let cleanVersion = stripComments(text, doc.uri.path, mergedShared);
 
           // Step 2: If private is OFF, strip private using private VCM (not parsed from doc)
           if (!includePrivate) {
@@ -249,9 +247,8 @@ async function updateSplitViewIfOpen(
         const privateComments = await readPrivateVCM(relativePath, vcmPrivateDir);
         const mergedShared = mergeSharedTextCleanMode(sharedComments);
 
-        // Step 1: Strip shared toggleables (non-alwaysShow)
-        const sharedToggleables = mergedShared.filter(c => !isAlwaysShow(c));
-        let cleanVersion = stripComments(updatedText, doc.uri.path, sharedToggleables);
+        // Step 1: Strip shared comments (stripComments automatically preserves alwaysShow)
+        let cleanVersion = stripComments(updatedText, doc.uri.path, mergedShared);
 
         // Step 2: If private is OFF, strip private using private VCM (not parsed from doc)
         if (!includePrivate) {
