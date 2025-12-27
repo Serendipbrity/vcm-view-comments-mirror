@@ -23,6 +23,7 @@ const { writeSharedVCM, writePrivateVCM } = require("./src/vcm/createVCMFiles");
 const { findInlineCommentStart, isolateCodeLine, findPrevNextCodeLine } = require("./src/lineUtils");
 const { updateAlwaysShow } = require("./src/alwaysShow");
 const { mergeSharedTextCleanMode } = require("./src/mergeTextCleanMode");
+const { findCommentAtCursor } = require("./src/findCommentAtCursor");
 
 // Global state variables for the extension
 let vcmEditor;           // Reference to the VCM split view editor
@@ -623,14 +624,7 @@ async function activate(context) {
         const docComments = parseDocComs(doc.getText(), doc.uri.path);
 
         // Find the comment at the selected line
-        const commentAtCursor = docComments.find(c => {
-          if (c.type === "inline") {
-            return c.commentedLineIndex === selectedLine;
-          } else if (c.type === "block" && c.block) {
-            return c.block.some(b => b.commentedLineIndex === selectedLine);
-          }
-          return false;
-        });
+        const commentAtCursor = findCommentAtCursor(docComments, selectedLine);
 
         if (!commentAtCursor) {
           vscode.window.showWarningMessage("VCM: You can only mark comment lines as 'Always Show'.");
@@ -715,14 +709,7 @@ async function activate(context) {
         const docComments = parseDocComs(doc.getText(), doc.uri.path);
 
         // Find the comment at the selected line
-        const commentAtCursor = docComments.find(c => {
-          if (c.type === "inline") {
-            return c.commentedLineIndex === selectedLine;
-          } else if (c.type === "block" && c.block) {
-            return c.block.some(b => b.commentedLineIndex === selectedLine);
-          }
-          return false;
-        });
+        const commentAtCursor = findCommentAtCursor(docComments, selectedLine);
 
         if (!commentAtCursor) {
           vscode.window.showWarningMessage("VCM: You can only unmark comment lines.");
@@ -842,14 +829,7 @@ async function activate(context) {
         const docComments = parseDocComs(doc.getText(), doc.uri.path);
 
         // Find the comment at the selected line
-        const commentAtCursor = docComments.find(c => {
-          if (c.type === "inline") {
-            return c.commentedLineIndex === selectedLine;
-          } else if (c.type === "block" && c.block) {
-            return c.block.some(b => b.commentedLineIndex === selectedLine);
-          }
-          return false;
-        });
+        const commentAtCursor = findCommentAtCursor(docComments, selectedLine);
 
         if (!commentAtCursor) {
           vscode.window.showWarningMessage("VCM: You can only mark comment lines as private.");
@@ -1021,14 +1001,7 @@ async function activate(context) {
         const docComments = parseDocComs(doc.getText(), doc.uri.path);
 
         // Find the comment at the selected line
-        const commentAtCursor = docComments.find((c) => {
-          if (c.type === "inline") {
-            return c.commentedLineIndex === selectedLine;
-          } else if (c.type === "block" && c.block) {
-            return c.block.some((b) => b.commentedLineIndex === selectedLine);
-          }
-          return false;
-        });
+        const commentAtCursor = findCommentAtCursor(docComments, selectedLine);
 
         if (!commentAtCursor) {
           vscode.window.showWarningMessage("VCM: You can only unmark comment lines.");

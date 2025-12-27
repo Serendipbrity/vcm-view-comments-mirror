@@ -1,5 +1,6 @@
 const vscode = require("vscode");
 const { buildContextKey } = require("./buildContextKey");
+const { findCommentAtCursor } = require("./findCommentAtCursor");
 
 async function updateAlwaysShowContext({ readBothVCMs, parseDocComs }) {
     const editor = vscode.window.activeTextEditor;
@@ -18,14 +19,7 @@ async function updateAlwaysShowContext({ readBothVCMs, parseDocComs }) {
       const docComments = parseDocComs(doc.getText(), doc.uri.path);
 
       // Find the comment at the current cursor position
-      const commentAtCursor = docComments.find(curr => {
-        if (curr.type === "inline") {
-          return curr.commentedLineIndex === selectedLine;
-        } else if (curr.type === "block" && curr.block) {
-          return curr.block.some(b => b.commentedLineIndex === selectedLine);
-        }
-        return false;
-      });
+      const commentAtCursor = findCommentAtCursor(docComments, selectedLine);
 
       // Set cursorOnComment based on whether we found a comment
       await vscode.commands.executeCommand('setContext', 'vcm.cursorOnComment', !!commentAtCursor);
