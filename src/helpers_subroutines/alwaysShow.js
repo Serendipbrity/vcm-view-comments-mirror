@@ -34,6 +34,12 @@ async function updateAlwaysShowContext({ readBothVCMs, parseDocComs }) {
       // Set cursorOnComment based on whether we found a comment
       await vscode.commands.executeCommand('setContext', 'vcm.cursorOnComment', !!commentAtCursor);
 
+      if (!comments || comments.length === 0) {
+        await vscode.commands.executeCommand('setContext', 'vcm.commentIsAlwaysShow', false);
+        await vscode.commands.executeCommand('setContext', 'vcm.commentIsPrivate', false);
+        return;
+      }
+
       if (!commentAtCursor) {
         await vscode.commands.executeCommand('setContext', 'vcm.commentIsAlwaysShow', false);
         await vscode.commands.executeCommand('setContext', 'vcm.commentIsPrivate', false);

@@ -8,8 +8,10 @@ const { isAlwaysShow } = require("./alwaysShow");
 /**
  * Inject ONLY the provided comments (except alwaysShow, which is never injected).
  * Caller passes either shared list or private list.
+ * @param {boolean} sharedVisible - Whether shared comments are visible in the target document
+ * @param {boolean} privateVisible - Whether private comments are visible in the target document
  */
-function injectComments(cleanText, filePath, comments = []) {
+function injectComments(cleanText, filePath, comments = [], sharedVisible = true, privateVisible = false) {
   // split("\n") turns the code into an array of lines so you can loop by index.
   const lines = cleanText.split("\n");
   const result = [];  // Where you'll push lines and comments in order, then join back later.
@@ -20,24 +22,51 @@ function injectComments(cleanText, filePath, comments = []) {
   // Never inject alwaysShow (those live physically in the file)
   const commentsToInject = (comments || []).filter(c => !isAlwaysShow(c));
 
-  // Create an empty Map to link each line’s unique hash → all positions in the file where that line exists. 
+  // Create an empty Map to link each line's unique hash → all positions in the file where that line exists.
   // (handles duplicates)
   // You use a Map instead of an object because the keys (hash strings) are not simple variable names and you may have duplicates.
   const lineHashToIndices = new Map();
   for (let i = 0; i < lines.length; i++) {
     if (!lines[i].trim()) continue;
 
-      const codeIdentity = isolateCodeLine(lines[i], commentMarkers);
-      const hash = hashLine(codeIdentity, 0);
-      if (!lineHashToIndices.has(hash)) { // If this hash hasn’t been seen before
+      const hash = hashLine(isolateCodeLine(lines[i], commentMarkers), 0);
+      if (!lineHashToIndices.has(hash)) { // If this hash hasn't been seen before
         lineHashToIndices.set(hash, []); // Create a new list as its value in the map.
       }
-      // Add the current line’s index to that hash’s list
+      // Add the current line's index to that hash's list
       // This allows for duplicate code lines:
       // If the same text appears twice (say, import torch on lines 3 and 20),
       // the map will have: "hash(import torch)" → [3, 20]
       // So later you can decide which one the comment should attach to.
     lineHashToIndices.get(hash).push(i);
+
+    const commentHash = hashLine(lines[i].trim(), 0);
+    if (commentHash !== hash) {
+      if (!lineHashToIndices.has(commentHash)) {
+        lineHashToIndices.set(commentHash, []);
+      }
+      lineHashToIndices.get(commentHash).push(i);
+    }
+  }
+
+  // Build a virtual map of comment hashes to their intended injection positions
+  // This allows consecutive comments to anchor to other comments being injected
+  const commentHashToPosition = new Map();
+  for (const comment of commentsToInject) {
+    let commentHash = null;
+    if (comment.type === "line") {
+      commentHash = hashLine(comment.text.trim(), 0);
+    } else if (comment.type === "block" && comment.block && comment.block.length > 0) {
+      commentHash = hashLine(comment.block[0].text.trim(), 0);
+    }
+
+    if (commentHash) {
+      // Map this comment's hash to the code line it will be inserted above
+      // We'll use the anchor to find the position (will be refined later with actual injection order)
+      if (!commentHashToPosition.has(commentHash)) {
+        commentHashToPosition.set(commentHash, comment);
+      }
+    }
   }
 
   // Helper: Find best matching line index among duplicates using context hashes
@@ -95,14 +124,22 @@ function injectComments(cleanText, filePath, comments = []) {
         if (nextHash === comment.nextHash) score += 10;
       }
 
-      return { idx, score };
+      // Calculate distance from original commentedLineIndex (if available) for tiebreaking
+      const distance = comment.commentedLineIndex !== undefined
+        ? Math.abs(idx - comment.commentedLineIndex)
+        : Infinity;
+
+      return { idx, score, distance };
     });
 
-    scores.sort((a, b) => (b.score - a.score) || (a.idx - b.idx));
+    // Sort by score (descending), then by distance from original position (ascending), then by line index (ascending)
+    scores.sort((a, b) => (b.score - a.score) || (a.distance - b.distance) || (a.idx - b.idx));
     return scores[0].idx;
   };
 
   const blockComments = commentsToInject.filter(c => c.type === "block").sort((a, b) => (a.block?.[0]?.commentedLineIndex || 0) - (b.block?.[0]?.commentedLineIndex || 0));
+
+  const lineComments = commentsToInject.filter(c => c.type === "line").sort((a, b) => (a.commentedLineIndex || 0) - (b.commentedLineIndex || 0));
 
   const inlineComments = commentsToInject
     .filter(c => c.type === "inline")
@@ -116,18 +153,40 @@ function injectComments(cleanText, filePath, comments = []) {
   // value = array of block comment objects that attach to that code line.
   // This is what injectComments() uses later to decide “for line i, which comments go above it?”
   const blockMap = new Map();
+  const lineMap = new Map();
   const inlineMap = new Map();
 
   // Loops through every block comment that needs to be inserted.
   for (const block of blockComments) {
-    // indices is an array of potential candidate line numbers where that code exists now.
-    // lineHashToIndices maps a hash of a code line → all possible line indices in the current document that match that code’s hash.
-    // block.anchor is that hash value — it’s how we know which code line this comment originally belonged to.
-    const indices = lineHashToIndices.get(block.anchor);
+    let indices = null;
+    let anchorHash = null;
+
+    // Use primaryAnchor for private consecutive comments
+    if (block.isPrivate && block.primaryAnchor) {
+      anchorHash = block.primaryAnchor;
+      indices = lineHashToIndices.get(anchorHash);
+
+      if (!indices?.length && existingCommentHashToIndices?.has(anchorHash)) {
+        indices = existingCommentHashToIndices.get(anchorHash);
+      }
+
+      // If not found in clean text, check if it's a comment being injected
+      if (!indices?.length && commentHashToPosition.has(anchorHash)) {
+        const targetComment = commentHashToPosition.get(anchorHash);
+        // Use the target comment's anchor to find injection position
+        indices = lineHashToIndices.get(targetComment.anchor);
+      }
+    }
+
+    // Fallback to code line anchor
+    if (!indices?.length) {
+      indices = lineHashToIndices.get(block.anchor);
+    }
+
     if (!indices?.length) continue;
 
     const targetIndex = findBestMatch(block, indices, usedIndices);
-    usedIndices.add(targetIndex); // Adds the target index to usedIndices (taken) so you don’t double-assign it.
+    usedIndices.add(targetIndex); // Adds the target index to usedIndices (taken) so you don't double-assign it.
 
       // if the map doesnt exist yet for this index
       if (!blockMap.has(targetIndex)) {
@@ -135,8 +194,45 @@ function injectComments(cleanText, filePath, comments = []) {
         blockMap.set(targetIndex, []);
       }
       // Actually stores the comment object(s) in that array — meaning:
-      // “When reinjecting, for this line index, insert this block comment above it.”
+      // "When reinjecting, for this line index, insert this block comment above it."
       blockMap.get(targetIndex).push(block);
+  }
+
+  for (const lineComment of lineComments) {
+    let indices = null;
+    let anchorHash = null;
+
+    // Use primaryAnchor for private consecutive comments
+    if (lineComment.isPrivate && lineComment.primaryAnchor) {
+      anchorHash = lineComment.primaryAnchor;
+      indices = lineHashToIndices.get(anchorHash);
+
+      if (!indices?.length && existingCommentHashToIndices?.has(anchorHash)) {
+        indices = existingCommentHashToIndices.get(anchorHash);
+      }
+
+      // If not found in clean text, check if it's a comment being injected
+      if (!indices?.length && commentHashToPosition.has(anchorHash)) {
+        const targetComment = commentHashToPosition.get(anchorHash);
+        // Use the target comment's anchor to find injection position
+        indices = lineHashToIndices.get(targetComment.anchor);
+      }
+    }
+
+    // Fallback to code line anchor
+    if (!indices?.length) {
+      indices = lineHashToIndices.get(lineComment.anchor);
+    }
+
+    if (!indices?.length) continue;
+
+    const targetIndex = findBestMatch(lineComment, indices, usedIndices);
+    // NOTE: Do NOT add to usedIndices - multiple line comments can share the same anchor
+
+    if (!lineMap.has(targetIndex)) {
+      lineMap.set(targetIndex, []);
+    }
+    lineMap.get(targetIndex).push(lineComment);
   }
 
   for (const inline of inlineComments) {
@@ -155,6 +251,7 @@ function injectComments(cleanText, filePath, comments = []) {
     // STEP 1: Insert any block comments anchored to this line
     // blocks maps anchor index → block comment(s) that should appear above this code line.
     const blocks = blockMap.get(i);
+    const lineCommentsAbove = lineMap.get(i);
     // Handle the case of multiple comment blocks anchored to the same code line (stacked).
     if (blocks) {
       for (const block of blocks) {
@@ -174,6 +271,25 @@ function injectComments(cleanText, filePath, comments = []) {
         for (const lineObj of linesToInject) {
           result.push(lineObj.text);
         }
+      }
+    }
+
+    // STEP 2: Insert any line comments anchored to this line
+    if (lineCommentsAbove) {
+      for (const lineComment of lineCommentsAbove) {
+        // Determine which version to inject: text_cleanMode or text
+        const hasTextCleanMode = typeof lineComment.text_cleanMode === "string";
+        const textsIdentical = hasTextCleanMode && lineComment.text === lineComment.text_cleanMode;
+
+        let textToInject = "";
+        if (hasTextCleanMode && !textsIdentical) {
+          textToInject = lineComment.text_cleanMode;
+        } else if (lineComment.text !== undefined) {
+          textToInject = lineComment.text;
+        }
+
+        // Always inject, even if blank (preserves spacing within comment groups)
+        result.push(textToInject);
       }
     }
 
@@ -248,6 +364,12 @@ function stripComments(text, filePath, vcmComments = []) {
       for (const b of current.block) {
         linesToRemove.add(b.commentedLineIndex);
       }
+      continue;
+    }
+
+    if (current.type === "line") {
+      // Remove this standalone line comment
+      linesToRemove.add(current.commentedLineIndex);
       continue;
     }
 

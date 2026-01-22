@@ -5,7 +5,7 @@ async function generateCommentedVersion(text, filePath, relativePath, readShared
   const existingSharedComments = await readSharedVCM(relativePath, vcmDir);
   const mergedSharedComments = mergeSharedTextCleanMode(existingSharedComments);
   const cleanText = stripComments(text, filePath, mergedSharedComments);
-  const newText = injectComments(cleanText, filePath, mergedSharedComments);
+  const newText = injectComments(cleanText, filePath, mergedSharedComments, true, false);
 
   return newText;
 }

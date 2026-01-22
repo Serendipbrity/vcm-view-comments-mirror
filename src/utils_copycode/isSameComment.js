@@ -4,32 +4,26 @@ const { getCommentText } = require("./getCommentText");
 /**
  * Compare two comments to determine if they are the same
  * - Always matches by context key (anchor + prevHash + nextHash)
+ * - For line comments: also checks commentedLineIndex when stored in VCM (to distinguish consecutive line comments)
  * - For inline: also requires exact text match when available
  * - For block: also requires block text match when available
  *
- * @param {Object} vcmComment - Comment from VCM file
- * @param {Object} docComment - Comment from document
+ * @param {Object} vcmComment - Comment from VCM file (has original commentedLineIndex)
+ * @param {Object} docComment - Comment from document (has current commentedLineIndex)
  * @returns {boolean} True if comments are considered the same
  */
 function isSameComment(vcmComment, docComment) {
+  // if context keys differ, comments are not the same
   if (buildContextKey(vcmComment) !== buildContextKey(docComment)) return false;
 
-  if (docComment.type === "inline") {
-    // If either side lacks text, fall back to key-only
-    if (typeof docComment.text !== "string" || typeof vcmComment.text !== "string") return true;
-    return vcmComment.text === docComment.text;
-  }
+  const docText = getCommentText(docComment);
+  const vcmText = getCommentText(vcmComment);
 
-  if (docComment.type === "block") {
-    const docBlockText = getCommentText(docComment);
-    const vcmBlockText = getCommentText(vcmComment);
+  // If either side lacks text, comments are not the same
+  if (!docText || !vcmText) return true;
 
-    // If either block is missing, fall back to key-only
-    if (!docBlockText || !vcmBlockText) return true;
-    return docBlockText === vcmBlockText;
-  }
-
-  return true;
+  // if context keys match (first conditional didn't fail), and text matches, comments are the same
+  return docText === vcmText;
 }
 
 module.exports = { isSameComment };

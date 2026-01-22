@@ -3,8 +3,8 @@ function mergeSharedTextCleanMode(sharedComments) {
     const merged = { ...comment };
 
     if (comment.text_cleanMode) {
-      if (comment.type === "inline") {
-        // For inline: text_cleanMode is a string, prepend to text
+      if (comment.type === "inline" || comment.type === "line") {
+        // For inline/line: text_cleanMode is a string, prepend to text
         merged.text = (comment.text_cleanMode || "") + (comment.text || "");
       } else if (comment.type === "block") {
         // For block: text_cleanMode is a block array, prepend to block

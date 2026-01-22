@@ -134,6 +134,7 @@ const BLOCK_COMMENT_MARKERS = {
   'css': [{ start: '/*', end: '*/' }],
   'scss': [{ start: '/*', end: '*/' }],
   'less': [{ start: '/*', end: '*/' }],
+  'js': [{ start: '/*', end: '*/' }],
 
   'html': [{ start: '<!--', end: '-->' }],
   'htm': [{ start: '<!--', end: '-->' }],
@@ -163,6 +164,18 @@ function getCommentMarkersForFile(filePath) {
   return LINE_COMMENT_MARKERS[ext] ?? DEFAULT_LINE_MARKERS;
 }
 
+function getLineMarkersForFile(filePath) {
+  const ext = filePath.split('.').pop().toLowerCase();
+  return LINE_COMMENT_MARKERS[ext] ?? DEFAULT_LINE_MARKERS;
+}
+
+function getBlockMarkersForFile(filePath) {
+  const ext = filePath.split('.').pop().toLowerCase();
+  return BLOCK_COMMENT_MARKERS[ext] ?? [];
+}
+
 module.exports = {
   getCommentMarkersForFile,
+  getLineMarkersForFile,
+  getBlockMarkersForFile,
 };

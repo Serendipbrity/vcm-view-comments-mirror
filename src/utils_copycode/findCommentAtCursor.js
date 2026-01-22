@@ -6,7 +6,7 @@
  */
 function findCommentAtCursor(docComments, selectedLine) {
     return docComments.find(c => {
-        if (c.type === "inline") {
+        if (c.type === "inline" || c.type === "line") {
             return c.commentedLineIndex === selectedLine;
         } else if (c.type === "block" && c.block) {
             return c.block.some(b => b.commentedLineIndex === selectedLine);

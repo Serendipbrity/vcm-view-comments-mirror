@@ -12,7 +12,7 @@ const { getCommentMarkersForFile } = require("./src/utils_copycode/commentMarker
 const { VCMContentProvider } = require("./src/split_view/contentProvider");
 const { hashLine } = require("./src/utils_copycode/hash");
 const { injectComments, stripComments } = require("./src/helpers_subroutines/injectExtractComments");
-const { parseDocComs } = require("./src/vcm/utils_copycode/parseDocComs");
+const { parseDocComs, enrichWithConsecutiveAnchors } = require("./src/vcm/utils_copycode/parseDocComs");
 const { mergeIntoVCMs } = require("./src/vcm/helpers_subroutines/mergeIntoVCMs");
 const { createDetectors } = require("./src/helpers_subroutines/detectModes");
 const { buildContextKey } = require("./src/utils_copycode/buildContextKey");
@@ -92,7 +92,7 @@ function buildCommentJumpIndex(parsedComments, docText, sourceFilePathForMarkers
     const key = buildContextKey(c);
 
     // Track which doc lines are "inside a comment" for O(1) click detection
-    if (c.type === "inline") {
+    if (c.type === "inline" || c.type === "line") {
       lineToComment.set(c.commentedLineIndex, c);
     } else if (c.type === "block" && Array.isArray(c.block)) {
       for (const b of c.block) {
@@ -102,7 +102,7 @@ function buildCommentJumpIndex(parsedComments, docText, sourceFilePathForMarkers
 
     // Track where this comment exists by its full context key
     const firstLine =
-      c.type === "inline"
+      c.type === "inline" || c.type === "line"
         ? c.commentedLineIndex
         : Array.isArray(c.block) && c.block.length > 0
         ? c.block[0].commentedLineIndex
@@ -330,6 +330,8 @@ async function activate(context) {
       if (textKey) privateTextMap.set(textKey, c);
     }
 
+    enrichWithConsecutiveAnchors(docComments, privateKeys);
+
     // ----------------------------
     // A) SHARED PIPELINE
     // ----------------------------
@@ -357,7 +359,7 @@ async function activate(context) {
 
     // Keep your empty-comment filter if you want (shared only)
     finalShared = finalShared.filter(comment => {
-      if (comment.type === "inline") {
+      if (comment.type === "inline" || comment.type === "line") {
         return (comment.text && comment.text.trim()) ||
               (comment.text_cleanMode && comment.text_cleanMode.trim());
       } else if (comment.type === "block") {
@@ -523,7 +525,10 @@ async function activate(context) {
 
       // Mark this file as now in clean mode
       isCommentedMap.set(doc.uri.fsPath, false);
-      // DO NOT change privateCommentsVisible - private comment visibility persists across mode toggles
+      // private comments not allowed in clean mode - mark as hidden
+      if (privateCommentsVisible.get(doc.uri.fsPath) === true) {
+        privateCommentsVisible.set(doc.uri.fsPath, false);
+      }
       vscode.window.showInformationMessage("VCM: Switched to clean mode (comments hidden)");
     } else {
       // Currently in clean mode -> switch to commented mode (show comments)
@@ -552,7 +557,7 @@ async function activate(context) {
           const cleanText = stripComments(text, doc.uri.path, sharedComments);
 
           // Inject shared comments
-          newText = injectComments(cleanText, doc.uri.path, sharedComments);
+          newText = injectComments(cleanText, doc.uri.path, sharedComments, true, false);
 
           // Mark that we just injected from VCM - don't re-extract on next save
           justInjectedFromVCM.add(doc.uri.fsPath);
@@ -622,8 +627,8 @@ async function activate(context) {
             comments.push(commentAtCursor);
           }
         } else {
-          // VCM exists - mark the comment in existing list using context matching
-          comments = sharedComments;
+          // VCM exists - read and mark the comment in existing list using context matching
+          comments = await readSharedVCM(relativePath, vcmDir);
 
           // Build context key for current comment
           const currentKey = buildContextKey(commentAtCursor);
@@ -733,6 +738,10 @@ async function activate(context) {
               const lastLine = Math.max(...matchingComment.block.map(b => b.commentedLineIndex));
               const range = new vscode.Range(firstLine, 0, lastLine + 1, 0);
               edit.delete(doc.uri, range);
+            } else if (matchingComment.type === "line") {
+              // Remove the standalone line comment
+              const range = new vscode.Range(matchingComment.commentedLineIndex, 0, matchingComment.commentedLineIndex + 1, 0);
+              edit.delete(doc.uri, range);
             } else if (matchingComment.type === "inline") {
               // Remove just the inline comment part (keep the code)
               const lineText = doc.lineAt(matchingComment.commentedLineIndex).text;
@@ -801,6 +810,15 @@ async function activate(context) {
         // Extract current comments and find the one at cursor position
         const docComments = parseDocComs(doc.getText(), doc.uri.path);
 
+        // Load current VCM state
+        const sharedExists = await vcmFileExists(vcmDir, relativePath);
+        const privateExists = await vcmFileExists(vcmPrivateDir, relativePath);
+
+        // Load current private VCM to build privateKeys for enrichment
+        const tempPrivateComments = privateExists ? await readPrivateVCM(relativePath, vcmPrivateDir) : [];
+        const privateKeys = new Set(tempPrivateComments.map(c => buildContextKey(c)));
+        enrichWithConsecutiveAnchors(docComments, privateKeys);
+
         // Find the comment at the selected line
         const commentAtCursor = findCommentAtCursor(docComments, selectedLine);
 
@@ -808,10 +826,10 @@ async function activate(context) {
           vscode.window.showWarningMessage("VCM: You can only mark comment lines as private.");
           return;
         }
-
-        // Load current VCM state
-        const sharedExists = await vcmFileExists(vcmDir, relativePath);
-        const privateExists = await vcmFileExists(vcmPrivateDir, relativePath);
+        if (commentAtCursor.type === "inline") {
+          vscode.window.showWarningMessage("VCM: Inline comments can't be marked as private.");
+          return;
+        }
 
         // If no VCM exists at all, create it first via saveVCM (single creation path)
         let sharedComments, privateComments;
@@ -868,6 +886,9 @@ async function activate(context) {
 
             // Delete whole lines including newline by targeting (lastLine + 1, 0)
             edit.delete(doc.uri, new vscode.Range(firstLine, 0, lastLine + 1, 0));
+          } else if (commentAtCursor.type === "line") {
+            // Remove the standalone line comment
+            edit.delete(doc.uri, new vscode.Range(commentAtCursor.commentedLineIndex, 0, commentAtCursor.commentedLineIndex + 1, 0));
           } else if (commentAtCursor.type === "inline") {
             // Remove inline comment portion from that single line
             const currentLine = doc.lineAt(commentAtCursor.commentedLineIndex);
@@ -941,6 +962,15 @@ async function activate(context) {
         // Extract current comments and find the one at cursor position
         const docComments = parseDocComs(doc.getText(), doc.uri.path);
 
+        // Load VCM state (treat missing files as empty)
+        const sharedExists = await vcmFileExists(vcmDir, relativePath);
+        const privateExists = await vcmFileExists(vcmPrivateDir, relativePath);
+
+        // Load current private VCM to build privateKeys for enrichment
+        const tempPrivateComments = privateExists ? await readPrivateVCM(relativePath, vcmPrivateDir) : [];
+        const privateKeys = new Set(tempPrivateComments.map(c => buildContextKey(c)));
+        enrichWithConsecutiveAnchors(docComments, privateKeys);
+
         // Find the comment at the selected line
         const commentAtCursor = findCommentAtCursor(docComments, selectedLine);
 
@@ -948,10 +978,6 @@ async function activate(context) {
           vscode.window.showWarningMessage("VCM: You can only unmark comment lines.");
           return;
         }
-
-        // Load VCM state (treat missing files as empty)
-        const sharedExists = await vcmFileExists(vcmDir, relativePath);
-        const privateExists = await vcmFileExists(vcmPrivateDir, relativePath);
 
         // If no VCM exists at all, create it first via saveVCM (single creation path)
         let sharedComments, privateComments;
@@ -1007,6 +1033,8 @@ async function activate(context) {
             const firstLine = Math.min(...commentAtCursor.block.map((b) => b.commentedLineIndex));
             const lastLine = Math.max(...commentAtCursor.block.map((b) => b.commentedLineIndex));
             edit.delete(doc.uri, new vscode.Range(firstLine, 0, lastLine + 1, 0));
+          } else if (commentAtCursor.type === "line") {
+            edit.delete(doc.uri, new vscode.Range(commentAtCursor.commentedLineIndex, 0, commentAtCursor.commentedLineIndex + 1, 0));
           } else if (commentAtCursor.type === "inline") {
             const currentLine = doc.lineAt(commentAtCursor.commentedLineIndex);
             const commentMarkers = getCommentMarkersForFile(doc.uri.path);
@@ -1218,7 +1246,7 @@ async function activate(context) {
         : stripComments(cleanSharedStripped, doc.uri.path, privateComments);
 
       // Build commented version: inject shared, conditionally inject private
-      let withComments = injectComments(clean, doc.uri.path, mergedSharedComments);
+      let withComments = injectComments(clean, doc.uri.path, mergedSharedComments, true, false);
 
       if (keepPrivate) {
         // Parse what's already in the text and build a set of existing comment keys
@@ -1229,7 +1257,7 @@ async function activate(context) {
         const missingPrivate = privateComments.filter(c => !existingKeys.has(buildContextKey(c)));
 
         if (missingPrivate.length > 0) {
-          withComments = injectComments(withComments, doc.uri.path, missingPrivate);
+          withComments = injectComments(withComments, doc.uri.path, missingPrivate, true, true);
         }
       }
 

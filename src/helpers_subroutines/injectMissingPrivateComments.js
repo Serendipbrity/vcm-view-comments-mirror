@@ -7,8 +7,8 @@ const { parseDocComs } = require("../vcm/utils_copycode/parseDocComs");
  * Only Inject private comments that are missing from the document
  * Prevents double-injection by only injecting comments that don't already exist
  * Differences between:
- * - injectComments = “blind inject”
- * - injectMissingPrivateComments = “inject only what isn’t already present (by contextKey)”
+ * - injectComments = "blind inject"
+ * - injectMissingPrivateComments = "inject only what isn't already present (by contextKey)"
  *
  * @param {string} text - Current document text
  * @param {string} filePath - File path for comment marker detection
@@ -21,7 +21,7 @@ function injectMissingPrivateComments(text, filePath, privateComments) {
   const missingPrivate = privateComments.filter(c => !existingKeys.has(buildContextKey(c)));
 
   if (missingPrivate.length > 0) {
-    return injectComments(text, filePath, missingPrivate);
+    return injectComments(text, filePath, missingPrivate, true, true);
   }
 
   return text;

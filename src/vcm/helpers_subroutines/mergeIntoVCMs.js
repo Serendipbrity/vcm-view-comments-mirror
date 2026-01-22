@@ -84,12 +84,21 @@ function mergeIntoVCMs({
         claimed.add(existing);
 
         // Update existing comment in place
-        existing.anchor = current.anchor;
         existing.prevHash = current.prevHash;
+        existing.anchor = current.anchor;
         existing.nextHash = current.nextHash;
-        existing.commentedLineIndex = current.commentedLineIndex;
+        existing.prevHashText = current.prevHashText;
         existing.anchorText = current.anchorText;
+        existing.nextHashText = current.nextHashText;
+        existing.primaryPrevHash = current.primaryPrevHash;
+        existing.primaryAnchor = current.primaryAnchor;
+        existing.primaryNextHash = current.primaryNextHash;
+        existing.primaryPrevHashText = current.primaryPrevHashText;
+        existing.primaryAnchorText = current.primaryAnchorText;
+        existing.primaryNextHashText = current.primaryNextHashText;
+        existing.commentedLineIndex = current.commentedLineIndex;
         if (current.type === "inline") existing.text = current.text;
+        if (current.type === "line") existing.text = current.text;
         if (current.type === "block") existing.block = current.block;
         existing.isPrivate = true;
       }
@@ -147,12 +156,21 @@ function mergeIntoVCMs({
 
         if (existing) {
           // Update existing comment in place
-          existing.anchor = current.anchor;
           existing.prevHash = current.prevHash;
+          existing.anchor = current.anchor;
           existing.nextHash = current.nextHash;
-          existing.commentedLineIndex = current.commentedLineIndex;
+          existing.prevHashText = current.prevHashText;
           existing.anchorText = current.anchorText;
+          existing.nextHashText = current.nextHashText;
+          existing.primaryPrevHash = current.primaryPrevHash;
+          existing.primaryAnchor = current.primaryAnchor;
+          existing.primaryNextHash = current.primaryNextHash;
+          existing.primaryPrevHashText = current.primaryPrevHashText;
+          existing.primaryAnchorText = current.primaryAnchorText;
+          existing.primaryNextHashText = current.primaryNextHashText;
+          existing.commentedLineIndex = current.commentedLineIndex;
           if (current.type === "inline") existing.text = current.text;
+          if (current.type === "line") existing.text = current.text;
           if (current.type === "block") existing.block = current.block;
         } else {
           // New comment - add to VCM and track it
@@ -225,14 +243,22 @@ function mergeIntoVCMs({
         if (existing) {
           // Found existing private comment - update it in place
           // Update content (may have been edited)
-          existing.text = current.text;
-          existing.block = current.block;
+          if (current.type === "inline" || current.type === "line") existing.text = current.text;
+          if (current.type === "block") existing.block = current.block;
           // Update anchor in case code moved
-          existing.anchor = current.anchor;
           existing.prevHash = current.prevHash;
+          existing.anchor = current.anchor;
           existing.nextHash = current.nextHash;
-          existing.commentedLineIndex = current.commentedLineIndex;
+          existing.prevHashText = current.prevHashText;
           existing.anchorText = current.anchorText;
+          existing.nextHashText = current.nextHashText;
+          existing.primaryPrevHash = current.primaryPrevHash;
+          existing.primaryAnchor = current.primaryAnchor;
+          existing.primaryNextHash = current.primaryNextHash;
+          existing.primaryPrevHashText = current.primaryPrevHashText;
+          existing.primaryAnchorText = current.primaryAnchorText;
+          existing.primaryNextHashText = current.primaryNextHashText;
+          existing.commentedLineIndex = current.commentedLineIndex;
           // Ensure isPrivate flag is preserved/set
           existing.isPrivate = true;
         }
@@ -307,10 +333,18 @@ function mergeIntoVCMs({
             existing = candidate;
             matchedInCleanMode.add(existing);
             // Update anchor to new position (comment moved with code)
-            existing.anchor = current.anchor;
             existing.prevHash = current.prevHash;
+            existing.anchor = current.anchor;
             existing.nextHash = current.nextHash;
+            existing.prevHashText = current.prevHashText;
             existing.anchorText = current.anchorText;
+            existing.nextHashText = current.nextHashText;
+            existing.primaryPrevHash = current.primaryPrevHash;
+            existing.primaryAnchor = current.primaryAnchor;
+            existing.primaryNextHash = current.primaryNextHash;
+            existing.primaryPrevHashText = current.primaryPrevHashText;
+            existing.primaryAnchorText = current.primaryAnchorText;
+            existing.primaryNextHashText = current.primaryNextHashText;
           }
         }
 
@@ -327,24 +361,40 @@ function mergeIntoVCMs({
           // Special handling for alwaysShow comments: update text/block directly (like commented mode)
           if (isAlwaysShow(existing)) {
             // Update content directly (no text_cleanMode for alwaysShow)
-            existing.text = current.text;
-            existing.block = current.block;
+            if (current.type === "inline" || current.type === "line") existing.text = current.text;
+            if (current.type === "block") existing.block = current.block;
             // Update anchor in case code moved
-            existing.anchor = current.anchor;
             existing.prevHash = current.prevHash;
+            existing.anchor = current.anchor;
             existing.nextHash = current.nextHash;
-            existing.commentedLineIndex = current.commentedLineIndex;
+            existing.prevHashText = current.prevHashText;
             existing.anchorText = current.anchorText;
+            existing.nextHashText = current.nextHashText;
+            existing.primaryPrevHash = current.primaryPrevHash;
+            existing.primaryAnchor = current.primaryAnchor;
+            existing.primaryNextHash = current.primaryNextHash;
+            existing.commentedLineIndex = current.commentedLineIndex;
+            existing.primaryPrevHashText = current.primaryPrevHashText;
+            existing.primaryAnchorText = current.primaryAnchorText;
+            existing.primaryNextHashText = current.primaryNextHashText;
           } else {
             // Regular comments: use text_cleanMode
             // But ALWAYS update anchor/position fields (code may have moved)
-            existing.anchor = current.anchor;
             existing.prevHash = current.prevHash;
+            existing.anchor = current.anchor;
             existing.nextHash = current.nextHash;
-            existing.commentedLineIndex = current.commentedLineIndex;
+            existing.prevHashText = current.prevHashText;
             existing.anchorText = current.anchorText;
+            existing.nextHashText = current.nextHashText;
+            existing.primaryPrevHash = current.primaryPrevHash;
+            existing.primaryAnchor = current.primaryAnchor;
+            existing.primaryNextHash = current.primaryNextHash;
+            existing.primaryPrevHashText = current.primaryPrevHashText;
+            existing.primaryAnchorText = current.primaryAnchorText;
+            existing.primaryNextHashText = current.primaryNextHashText;
+            existing.commentedLineIndex = current.commentedLineIndex;
 
-            if (current.type === "inline") {
+            if (current.type === "inline" || current.type === "line") {
               if (current.text !== existing.text) {
                 existing.text_cleanMode = current.text;
               } else {
@@ -367,7 +417,7 @@ function mergeIntoVCMs({
           // SEPARATION CONTRACT: Each store operates independently
           // New comments go into THIS store (shared), regardless of what's in other store (private)
           const newComment = { ...current };
-          if (current.type === "inline") {
+          if (current.type === "inline" || current.type === "line") {
             newComment.text_cleanMode = current.text;
             delete newComment.text;
           } else if (current.type === "block") {

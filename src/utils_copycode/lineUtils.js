@@ -89,13 +89,13 @@ function findPrevNextCodeLine(startIndex, lines, isComment) {
   // Scan backward for prev code line.
   for (let j = startIndex - 1; j >= 0; j--) {
     const trimmed = lines[j].trim();
-    if (trimmed && !isComment(lines[j])) { prevIdx = j; break; }
+    if (trimmed && !isComment(lines[j], j)) { prevIdx = j; break; }
   }
 
   // Scan forward for next code line.
   for (let j = startIndex + 1; j < lines.length; j++) {
     const trimmed = lines[j].trim();
-    if (trimmed && !isComment(lines[j])) { nextIdx = j; break; }
+    if (trimmed && !isComment(lines[j], j)) { nextIdx = j; break; }
   }
 
   return { prevIdx, nextIdx };

@@ -225,7 +225,7 @@ async function updateSplitViewIfOpen(
           // 1) remove any existing private comments (prevents double injection)
           // 2) inject private comments exactly once
           const withoutPrivate = stripComments(currentSplitContent, doc.uri.path, privateComments);
-          updatedSplitContent = injectComments(withoutPrivate, doc.uri.path, privateComments);
+          updatedSplitContent = injectComments(withoutPrivate, doc.uri.path, privateComments, true, true);
         } else {
           // Private OFF: strip private comments only
           updatedSplitContent = stripComments(currentSplitContent, doc.uri.path, privateComments);
