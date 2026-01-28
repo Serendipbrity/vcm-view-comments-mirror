@@ -1,8 +1,6 @@
 const { findInlineCommentStart, isolateCodeLine, findPrevNextCodeLine } = require("../../utils_copycode/lineUtils");
 const { getCommentMarkersForFile, getLineMarkersForFile, getBlockMarkersForFile } = require("../../utils_copycode/commentMarkers");
 const { hashLine } = require("../../utils_copycode/hash");
-const { getCommentText } = require("../../utils_copycode/getCommentText");
-const { buildContextKey } = require("../../utils_copycode/buildContextKey");
 // ===========================================================
 // parseDocComs
 // ===========================================================
@@ -19,6 +17,7 @@ function parseDocComs(text, filePath) {
   let blockCommentBuffer = [];
   let blockCommentStartMarker = null;
   let blockCommentEndMarker = null;
+  let pendingLineCommentBuffer = null;
 
   const lineMarkers = getLineMarkersForFile(filePath);
   const blockMarkers = getBlockMarkersForFile(filePath);
@@ -103,11 +102,9 @@ function parseDocComs(text, filePath) {
   // Helper: Predicate for findPrevNextCodeLine - returns true if line is comment-only
   const isCommentOnlyLine = (l, idx) => commentOnlyLines.has(idx);
 
-  // Helper: Emit buffered line comments as individual type:"line" objects
-  const flushLineComments = (anchorLineIdx) => {
-    if (lineCommentBuffer.length === 0) return;
-
-    for (const lineObj of lineCommentBuffer) {
+  const emitLineComments = (lineBuffer, anchorLineIdx) => {
+    if (!lineBuffer || lineBuffer.length === 0) return;
+    for (const lineObj of lineBuffer) {
       const { prevIdx } = findPrevNextCodeLine(lineObj.commentedLineIndex, lines, (l, idx) =>
         isCommentOnlyLine(l, idx)
       );
@@ -140,7 +137,11 @@ function parseDocComs(text, filePath) {
         insertAbove: true,
       });
     }
+  };
 
+  // Helper: Emit buffered line comments as individual type:"line" objects
+  const flushLineComments = (anchorLineIdx) => {
+    emitLineComments(lineCommentBuffer, anchorLineIdx);
     lineCommentBuffer = [];
   };
 
@@ -189,41 +190,11 @@ function parseDocComs(text, filePath) {
           : null;
         const nextHashText = nextAfterAnchorIdx >= 0 ? isolateCodeLine(lines[nextAfterAnchorIdx], commentMarkers) : "";
 
-        // If this is a header comment (prevHash is null), include trailing blank lines
-        // This preserves spacing after header comments at the start of the file
-        const isHeaderComment = prevHash === null;
-        if (isHeaderComment) {
-          // Check for blank lines immediately after this block comment
-          for (let j = i + 1; j < lines.length; j++) {
-            if (!lines[j].trim()) {
-              // Blank line - include it in the block
-              blockCommentBuffer.push({
-                text: lines[j],
-                commentedLineIndex: j,
-              });
-            } else {
-              // Hit non-blank line, stop
-              break;
-            }
-          }
-        } else {
-          let nextNonBlankIdx = -1;
-          for (let j = i + 1; j < lines.length; j++) {
-            if (lines[j].trim()) {
-              nextNonBlankIdx = j;
-              break;
-            }
-          }
-          if (nextNonBlankIdx >= 0 && commentOnlyLines.has(nextNonBlankIdx)) {
-            for (let j = i + 1; j < nextNonBlankIdx; j++) {
-              if (!lines[j].trim()) {
-                blockCommentBuffer.push({
-                  text: lines[j],
-                  commentedLineIndex: j,
-                });
-              }
-            }
-          }
+        // Do not include blank lines outside the block in the block buffer.
+
+        if (pendingLineCommentBuffer && pendingLineCommentBuffer.length > 0) {
+          emitLineComments(pendingLineCommentBuffer, anchorLineIdx);
+          pendingLineCommentBuffer = null;
         }
 
         comments.push({
@@ -256,8 +227,10 @@ function parseDocComs(text, filePath) {
     // CASE 2: Check if a delimited block comment starts on this line
     const blockStart = findBlockCommentStart(line);
     if (blockStart && blockStart.idx === line.indexOf(blockStart.start)) {
-      // Flush any pending line comments first
-      flushLineComments(i);
+      if (lineCommentBuffer.length > 0) {
+        pendingLineCommentBuffer = lineCommentBuffer;
+        lineCommentBuffer = [];
+      }
 
       // Check if block comment also ends on the same line
       const endIdx = findBlockCommentEnd(line, blockStart.end, blockStart.idx + blockStart.start.length);
@@ -290,37 +263,11 @@ function parseDocComs(text, filePath) {
         // Build the block array
         const blockArray = [{ text: line, commentedLineIndex: i }];
 
-        // If this is a header comment (prevHash is null), include trailing blank lines
-        const isHeaderComment = prevHash === null;
-        if (isHeaderComment) {
-          for (let j = i + 1; j < lines.length; j++) {
-            if (!lines[j].trim()) {
-              blockArray.push({
-                text: lines[j],
-                commentedLineIndex: j,
-              });
-            } else {
-              break;
-            }
-          }
-        } else {
-          let nextNonBlankIdx = -1;
-          for (let j = i + 1; j < lines.length; j++) {
-            if (lines[j].trim()) {
-              nextNonBlankIdx = j;
-              break;
-            }
-          }
-          if (nextNonBlankIdx >= 0 && commentOnlyLines.has(nextNonBlankIdx)) {
-            for (let j = i + 1; j < nextNonBlankIdx; j++) {
-              if (!lines[j].trim()) {
-                blockArray.push({
-                  text: lines[j],
-                  commentedLineIndex: j,
-                });
-              }
-            }
-          }
+        // Do not include blank lines outside the block in the block array.
+
+        if (pendingLineCommentBuffer && pendingLineCommentBuffer.length > 0) {
+          emitLineComments(pendingLineCommentBuffer, anchorLineIdx);
+          pendingLineCommentBuffer = null;
         }
 
         comments.push({
@@ -356,12 +303,6 @@ function parseDocComs(text, filePath) {
 
     // CASE 4: Blank line - check if it's within a line comment group
     if (!trimmed) {
-      if (lineCommentBuffer.length > 0) {
-        lineCommentBuffer.push({
-          text: line,
-          commentedLineIndex: i,
-        });
-      }
       continue;
     }
 
@@ -412,79 +353,85 @@ function parseDocComs(text, filePath) {
     flushLineComments(firstCodeIndex >= 0 ? firstCodeIndex : 0);
   }
 
+  const countBlankAbove = (startIdx) => {
+    let count = 0;
+    for (let j = startIdx - 1; j >= 0; j--) {
+      if (lines[j].trim()) break;
+      count += 1;
+    }
+    return count;
+  };
+
+  const countBlankBelow = (endIdx) => {
+    let count = 0;
+    for (let j = endIdx + 1; j < lines.length; j++) {
+      if (lines[j].trim()) break;
+      count += 1;
+    }
+    return count;
+  };
+
+  const getBlockContentRange = (blockArray) => {
+    if (!Array.isArray(blockArray) || blockArray.length === 0) {
+      return { start: -1, end: -1 };
+    }
+    const nonBlankIndices = blockArray
+      .filter((b) => b && typeof b.commentedLineIndex === "number")
+      .filter((b) => (b.text || "").trim() !== "")
+      .map((b) => b.commentedLineIndex);
+    if (nonBlankIndices.length > 0) {
+      return {
+        start: Math.min(...nonBlankIndices),
+        end: Math.max(...nonBlankIndices),
+      };
+    }
+    const allIndices = blockArray
+      .filter((b) => b && typeof b.commentedLineIndex === "number")
+      .map((b) => b.commentedLineIndex);
+    if (allIndices.length > 0) {
+      return { start: Math.min(...allIndices), end: Math.max(...allIndices) };
+    }
+    return { start: -1, end: -1 };
+  };
+
+  for (const comment of comments) {
+    if (comment.type === "inline") continue;
+    if (comment.type === "line") {
+      const idx = comment.commentedLineIndex;
+      if (typeof idx === "number" && idx >= 0 && idx < lines.length) {
+        comment.spacingBefore = countBlankAbove(idx);
+        comment.spacingAfter  = countBlankBelow(idx);
+      } else {
+        comment.spacingBefore = 0;
+        comment.spacingAfter  = 0;
+      }
+      continue;
+    }
+
+    let rangeStart = -1;
+    let rangeEnd = -1;
+    if (comment.type === "block") {
+      const range = getBlockContentRange(comment.block);
+      rangeStart = range.start;
+      rangeEnd = range.end;
+    } else if (typeof comment.commentedLineIndex === "number") {
+      rangeStart = comment.commentedLineIndex;
+      rangeEnd = comment.commentedLineIndex;
+    }
+
+    if (rangeStart >= 0 && rangeEnd >= 0) {
+      const spacingBefore = countBlankAbove(rangeStart);
+      const spacingAfter = countBlankBelow(rangeEnd);
+      comment.spacingBefore = spacingBefore;
+      comment.spacingAfter = spacingAfter;
+    }
+  }
+
   return comments;
 }
 
-function enrichWithConsecutiveAnchors(comments, privateKeys, privateTextSet) {
-  // Helper: Get comment identity text for hashing (mirrors isolateCodeLine for code)
-  // Why use full block text: two blocks with identical first lines but different content
-  // must have different identities to avoid hash collisions in comment-to-comment anchoring
-  const getCommentIdentityText = (c) => getCommentText(c) || "";
-  const getCommentFirstLineText = (c) => {
-    if (c.type === "block") {
-      const blockArray = c.block || c.text_cleanMode;
-      if (Array.isArray(blockArray) && blockArray.length > 0) {
-        for (const line of blockArray) {
-          const text = typeof line === "string" ? line : (line.text || "");
-          if (text.trim()) return text;
-        }
-      }
-    }
-    if (c.type === "line") {
-      const text = c.text || c.text_cleanMode || "";
-      return text.trim() ? text : "";
-    }
-    const text = getCommentIdentityText(c);
-    if (!text) return "";
-    return text.split("\n")[0];
-  };
-  const getLineAfterCommentFirstLine = (c) => {
-    if (c.type === "block") {
-      const blockArray = c.block || c.text_cleanMode;
-      if (Array.isArray(blockArray) && blockArray.length > 1) {
-        let foundFirst = false;
-        for (const line of blockArray) {
-          const text = typeof line === "string" ? line : (line.text || "");
-          if (!text.trim()) continue;
-          if (!foundFirst) {
-            foundFirst = true;
-            continue;
-          }
-          return text;
-        }
-      }
-    }
-    return "";
-  };
-  const getCommentLastLineText = (c) => {
-    if (c.type === "block") {
-      const blockArray = c.block || c.text_cleanMode;
-      if (Array.isArray(blockArray) && blockArray.length > 0) {
-        for (let i = blockArray.length - 1; i >= 0; i--) {
-          const line = blockArray[i];
-          const text = typeof line === "string" ? line : (line.text || "");
-          if (text.trim()) return text;
-        }
-      }
-    }
-    if (c.type === "line") {
-      const text = c.text || c.text_cleanMode || "";
-      return text.trim() ? text : "";
-    }
-    const text = getCommentIdentityText(c);
-    if (!text) return "";
-    const lines = text.split("\n");
-    return lines[lines.length - 1];
-  };
-
-  // Helper: Get readable text version (for *Text fields)
-  const getCommentReadableText = (c) => {
-    if (c.type === "line") return c.text.trim();
-    if (c.type === "block" && c.block && c.block.length > 0) {
-      return c.block[0].text.trim();
-    }
-    return "";
-  };
+function addPrimaryAnchors(comments, options = {}) {
+  const lines = Array.isArray(options.lines) ? options.lines : null;
 
   // Step 1: Group comments into consecutive stacks by document contiguity
   // Why base anchor alone is insufficient: comments with same anchor may not be contiguous
@@ -492,93 +439,117 @@ function enrichWithConsecutiveAnchors(comments, privateKeys, privateTextSet) {
   // We need contiguous regions to correctly model comment-to-comment relationships.
   const stacks = [];
   let currentStack = [];
+  let prevRange = null;
 
-  const lineBlockComments = comments.filter(c =>
-    (c.type === "block") || (c.type === "line" && (c.text || c.text_cleanMode || "").trim())
+  const getCommentLineRange = (c) => {
+    if (c.type === "block") {
+      const blockArray = Array.isArray(c.block) ? c.block : Array.isArray(c.text_cleanMode) ? c.text_cleanMode : null;
+      if (blockArray && blockArray.length > 0) {
+        const indices = blockArray
+          .map((line) => line && line.commentedLineIndex)
+          .filter((idx) => typeof idx === "number");
+        if (indices.length > 0) {
+          return { start: Math.min(...indices), end: Math.max(...indices) };
+        }
+      }
+    }
+
+    if (typeof c.commentedLineIndex === "number") {
+      return { start: c.commentedLineIndex, end: c.commentedLineIndex };
+    }
+
+    return { start: -1, end: -1 };
+  };
+
+  const consecutiveComments = comments.filter(
+    (c) =>
+      // c.type === "inline" ||
+      c.type === "block" ||
+      (c.type === "line" && (c.text || c.text_cleanMode || "").trim())
   );
 
-  for (let i = 0; i < lineBlockComments.length; i++) {
-    const comment = lineBlockComments[i];
+  for (const comment of consecutiveComments) {
+    const range = getCommentLineRange(comment);
+    if (range.start < 0) continue;
 
     if (currentStack.length === 0) {
       currentStack.push(comment);
-    } else {
-      const prevComment = currentStack[currentStack.length - 1];
-
-      // Comments are contiguous if they share the same anchor AND are adjacent in the array
-      // (parseDocComs already outputs comments in document order, so adjacency = contiguity)
-      const sameAnchor = comment.anchor === prevComment.anchor;
-
-      if (sameAnchor) {
-        currentStack.push(comment);
-      } else {
-        if (currentStack.length > 0) {
-          stacks.push(currentStack);
-        }
-        currentStack = [comment];
-      }
+      prevRange = range;
+      continue;
     }
+
+    const areOnlyBlankLinesBetween = (prev, next) => {
+      if (!lines) return false;
+      if (next.start <= prev.end + 1) return false;
+      for (let j = prev.end + 1; j < next.start; j++) {
+        if (lines[j] && lines[j].trim()) return false;
+      }
+      return true;
+    };
+    // TODO: change this to check buildcontext keys (without primary. so only code lines)
+    // if the contextkeys are the same then they are consecutive comments and should use primary
+    const isAdjacent = prevRange && (
+      range.start === prevRange.end + 1 ||
+      areOnlyBlankLinesBetween(prevRange, range)
+    );
+    if (isAdjacent) {
+      currentStack.push(comment);
+    } else {
+      stacks.push(currentStack);
+      currentStack = [comment];
+    }
+    prevRange = range;
   }
-  if (currentStack.length > 0) {
-    stacks.push(currentStack);
-  }
+  if (currentStack.length > 0) stacks.push(currentStack);
 
   // Step 2: Process each stack
   for (const stack of stacks) {
     // Only enrich if stack has multiple comments (consecutive)
-    if (stack.length <= 1) continue;
+    // if (stack.length <= 1) continue;
 
-    // Process each comment in the stack
+    // Process each comment in the stack - add primary fields for ordering
     for (let i = 0; i < stack.length; i++) {
       const comment = stack[i];
-      const commentText = getCommentText(comment);
-      const commentIsPrivate = privateTextSet
-        ? (commentText && privateTextSet.has(commentText))
-        : (privateKeys && privateKeys.has(buildContextKey(comment)));
+      const range = getCommentLineRange(comment);
 
-      if (commentIsPrivate) {
-        // PRIMARY CHAIN: private comments in a consecutive stack (mirrors base prev/next logic)
-        const primaryPrevComment = i > 0 ? stack[i - 1] : null;
-        const primaryNextComment = i < stack.length - 1 ? stack[i + 1] : null;
-
-        if (primaryPrevComment) {
-          const identityText = getCommentLastLineText(primaryPrevComment);
-          comment.primaryPrevHash = hashLine(identityText, 0);
-          comment.primaryPrevHashText = getCommentLastLineText(primaryPrevComment);
-        } else {
-          comment.primaryPrevHash = comment.prevHash;
-          comment.primaryPrevHashText = "";
-        }
-
-        let primaryNextAfterAnchor = null;
-        let primaryNextAfterAnchorLine = "";
-        if (primaryNextComment) {
-          primaryNextAfterAnchorLine = getLineAfterCommentFirstLine(primaryNextComment);
-          if (!primaryNextAfterAnchorLine) {
-            primaryNextAfterAnchor = i + 2 < stack.length ? stack[i + 2] : null;
+      // PRIMARY PREV: Find immediate non-empty line before this comment (comment or code)
+      if (lines && range.start > 0) {
+        for (let j = range.start - 1; j >= 0; j--) {
+          const lineText = lines[j];
+          if (lineText && lineText.trim()) {
+            comment.primaryPrevHash = hashLine(lineText, 0);
+            comment.primaryPrevHashText = lineText;
+            break;
           }
         }
+      }
 
-        if (primaryNextAfterAnchorLine) {
-          comment.primaryNextHash = hashLine(primaryNextAfterAnchorLine, 0);
-          comment.primaryNextHashText = primaryNextAfterAnchorLine;
-        } else if (primaryNextAfterAnchor) {
-          const identityText = getCommentFirstLineText(primaryNextAfterAnchor);
-          comment.primaryNextHash = hashLine(identityText, 0);
-          comment.primaryNextHashText = getCommentReadableText(primaryNextAfterAnchor);
-        } else {
-          comment.primaryNextHash = comment.nextHash;
-          comment.primaryNextHashText = "";
+      // PRIMARY ANCHOR: Find immediate non-empty line after this comment (comment or code)
+      if (lines && range.end >= 0 && range.end < lines.length - 1) {
+        for (let j = range.end + 1; j < lines.length; j++) {
+          const lineText = lines[j];
+          if (lineText && lineText.trim()) {
+            comment.primaryAnchor = hashLine(lineText, 0);
+            comment.primaryAnchorText = lineText;
+            break;
+          }
         }
+      }
 
-        // primaryAnchor: points to next comment OR code line
-        if (primaryNextComment) {
-          const identityText = getCommentIdentityText(primaryNextComment);
-          comment.primaryAnchor = hashLine(identityText, 0);
-          comment.primaryAnchorText = getCommentReadableText(primaryNextComment);
-        } else {
-          comment.primaryAnchor = comment.anchor;
-          comment.primaryAnchorText = comment.anchorText;
+      // PRIMARY NEXT: Find the line after the anchor (second non-empty line after this comment)
+      if (lines && range.end >= 0 && range.end < lines.length - 1) {
+        let foundFirst = false;
+        for (let j = range.end + 1; j < lines.length; j++) {
+          const lineText = lines[j];
+          if (lineText && lineText.trim()) {
+            if (!foundFirst) {
+              foundFirst = true;
+              continue;
+            }
+            comment.primaryNextHash = hashLine(lineText, 0);
+            comment.primaryNextHashText = lineText;
+            break;
+          }
         }
       }
     }
@@ -587,4 +558,4 @@ function enrichWithConsecutiveAnchors(comments, privateKeys, privateTextSet) {
   return comments;
 }
 
-module.exports = { parseDocComs, enrichWithConsecutiveAnchors };
+module.exports = { parseDocComs, addPrimaryAnchors };

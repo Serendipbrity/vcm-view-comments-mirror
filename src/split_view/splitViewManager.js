@@ -100,7 +100,7 @@ function setupSplitViewWatchers(context, provider, getSplitViewState, readShared
         // Only detect mode on undo/redo/paste (might have changed modes)
         // For normal typing, use stored mode (typing in clean mode stays in clean mode)
         if (isUndoRedo) {
-          actualMode = await detectInitialMode(doc, vcmDir);
+          actualMode = await detectInitialMode(doc, { storedMode });
           if (storedMode !== actualMode) {
             isCommentedMap.set(doc.uri.fsPath, actualMode);
           } else {

@@ -55,13 +55,55 @@ async function writeVCMFile({ relativePath, dirUri, comments, stripIsPrivate }) 
   if (comments && comments.length > 0) {
     await ensureSubdirsExist(dirUri, relativePath);
 
+    const reorderCommentFields = (comment) => {
+      const ordered = {};
+      const preferredOrder = [
+        "type",
+        "prevHash",
+        "anchor",
+        "nextHash",
+        "prevHashText",
+        "anchorText",
+        "nextHashText",
+        "primaryPrevHash",
+        "primaryAnchor",
+        "primaryNextHash",
+        "primaryPrevHashText",
+        "text",
+        "block",
+        "text_cleanMode",
+        "cleanModeOrigin",
+        "primaryAnchorText",
+        "primaryNextHashText",
+        "commentedLineIndex",
+        "insertAbove",
+        "spacingBefore",
+        "spacingAfter",
+        "isPrivate",
+      ];
+
+      for (const key of preferredOrder) {
+        if (comment[key] !== undefined) {
+          ordered[key] = comment[key];
+        }
+      }
+
+      for (const key of Object.keys(comment)) {
+        if (ordered[key] === undefined) {
+          ordered[key] = comment[key];
+        }
+      }
+
+      return ordered;
+    };
+
     const normalized = stripIsPrivate
       ? comments.map((c) => {
           // Remove isPrivate flag for canonical private storage
           const { isPrivate, ...rest } = c;
-          return rest;
+          return reorderCommentFields(rest);
         })
-      : comments;
+      : comments.map((c) => reorderCommentFields(c));
 
     const payload = {
       file: relativePath,

@@ -25,15 +25,18 @@ async function commentedModeBehavior({
 }) {
   let newText;
   try {
-    newText = await generateCommentedVersion(text, doc.uri.path, relativePath, readVCM, vcmDir);
-
     const existingComments = await readVCM(relativePath, vcmDir);
     const mergedComments = mergeSharedTextCleanMode(existingComments);
     await writeVCM(relativePath, mergedComments, vcmDir);
+    if (injectFn !== injectComments) {
+      newText = await injectFn(text, doc.uri.path, mergedComments);
+    } else {
+      newText = await generateCommentedVersion(text, doc.uri.path, relativePath, readVCM, vcmDir);
+    }
   } catch {
     await saveVCM(doc, true);
     const comments = await readVCM(relativePath, vcmDir);
-    const cleanText = stripComments(text, doc.uri.path, comments);
+    const cleanText = stripComments(text, doc.uri.path, comments, { contextComments: comments });
     newText = injectFn(cleanText, doc.uri.path, comments);
   }
   return newText;

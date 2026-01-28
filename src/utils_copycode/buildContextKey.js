@@ -7,13 +7,14 @@
 // context hashes instead of the base anchor.
 function buildContextKey(comment, options = {}) {
   const { usePrimaryAnchor = false } = options;
+  const usePrimary = usePrimaryAnchor && comment.type !== "inline";
 
   let anchorToUse = comment.anchor;
   let prevHashToUse = comment.prevHash || "null";
   let nextHashToUse = comment.nextHash || "null";
 
   // Use primaryAnchor with its corresponding context hashes
-  if (usePrimaryAnchor && comment.primaryAnchor) {
+  if (usePrimary && comment.primaryAnchor) {
     anchorToUse = comment.primaryAnchor;
     prevHashToUse = comment.primaryPrevHash || "null";
     nextHashToUse = comment.primaryNextHash || "null";

@@ -1,6 +1,6 @@
-const { buildContextKey } = require("../utils_copycode/buildContextKey");
 const { injectComments } = require("./injectExtractComments");
-const { parseDocComs } = require("../vcm/utils_copycode/parseDocComs");
+const { parseDocComs, addPrimaryAnchors } = require("../vcm/utils_copycode/parseDocComs");
+const { isSameComment } = require("../utils_copycode/isSameComment");
 
 /**
  * injectMissingPrivateComments is a guard/wrapper around injectComments
@@ -17,8 +17,8 @@ const { parseDocComs } = require("../vcm/utils_copycode/parseDocComs");
  */
 function injectMissingPrivateComments(text, filePath, privateComments) {
   const existing = parseDocComs(text, filePath);
-  const existingKeys = new Set(existing.map(c => buildContextKey(c)));
-  const missingPrivate = privateComments.filter(c => !existingKeys.has(buildContextKey(c)));
+  addPrimaryAnchors(existing, { lines: text.split("\n") });
+  const missingPrivate = privateComments.filter(c => !existing.some(e => isSameComment(e, c)));
 
   if (missingPrivate.length > 0) {
     return injectComments(text, filePath, missingPrivate, true, true);

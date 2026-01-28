@@ -13,7 +13,11 @@ function createDetectors({
 }) {
 
   // SHARED MODE DETECTION: clean vs commented
-  async function detectInitialMode(doc) {
+  async function detectInitialMode(doc, options = {}) {
+    const opts =
+      options && typeof options === "object" && !Array.isArray(options) ? options : {};
+    const storedMode = typeof opts.storedMode === "boolean" ? opts.storedMode : undefined;
+
     // get file path relative to workspace root e.g. src/file.ts instead of full file:///...)
     const relativePath = vscode.workspace.asRelativePath(doc.uri);
 
@@ -38,43 +42,52 @@ function createDetectors({
         return false;
       }
 
-      // Use the FIRST toggleable shared comment as the detection anchor.
-      const anchorShared = toggleableShared[0];
-      const anchorKey = buildContextKey(anchorShared);
+      const isCleanModeDerived = (comment) => {
+        if (!comment) return false;
+        if (comment.cleanModeOrigin === true) return true;
+        if (comment.text_cleanMode === undefined || comment.text_cleanMode === null) return false;
+        if (comment.type === "block") {
+          return Array.isArray(comment.text_cleanMode) && comment.text_cleanMode.length > 0;
+        }
+        if (comment.type === "line" || comment.type === "inline") {
+          return typeof comment.text_cleanMode === "string" && comment.text_cleanMode.length > 0;
+        }
+        return false;
+      };
+
+      // Ignore clean-mode-origin comments for detection; they don't indicate mode.
+      const detectionCandidates = toggleableShared.filter((c) => !isCleanModeDerived(c));
+      if (detectionCandidates.length === 0) {
+        return storedMode !== undefined ? storedMode : false;
+      }
 
       const text = doc.getText();
       const vcmObjects = parseDocComs(text, doc.uri.path);
 
-      // 1) Strong match: by anchor key
-      const foundByKey = vcmObjects.some((obj) => buildContextKey(obj) === anchorKey);
-      if (foundByKey) {
-        return true; // commented mode
+      if (vcmObjects.length === 0) {
+        return storedMode !== undefined ? storedMode : false;
       }
 
-      // 2) Fallback: match by comment text (in case something drifted)
-      let anchorText = null;
-      if (anchorShared.type === "inline") {
-        anchorText = anchorShared.text || null;
-      } else if (anchorShared.block && anchorShared.block[0]) {
-        anchorText = anchorShared.block[0].text || null;
-      }
+      const docKeys = new Set(vcmObjects.map((obj) => buildContextKey(obj)));
+      const docTexts = vcmObjects.map((obj) => getCommentText(obj)).filter(Boolean);
 
-      if (!anchorText) {
-        // No usable text signature; safest guess is clean.
-        return false;
-      }
-
-      const foundByText = vcmObjects.some((c) => {
-        if (c.type === "inline") {
-          return c.text && c.text.includes(anchorText);
+      // 1) Strong match: any toggleable shared comment by anchor key
+      for (const shared of detectionCandidates) {
+        if (docKeys.has(buildContextKey(shared))) {
+          return true;
         }
-        if (c.block) {
-          return c.block.some((b) => b.text && b.text.includes(anchorText));
-        }
-        return false;
-      });
+      }
 
-      return foundByText; // true = commented, false = clean
+      // 2) Fallback: any toggleable shared comment by text (anchors drifted/edited)
+      for (const shared of detectionCandidates) {
+        const sharedText = getCommentText(shared);
+        if (!sharedText) continue;
+        if (docTexts.some((t) => t.includes(sharedText))) {
+          return true;
+        }
+      }
+
+      return storedMode !== undefined ? storedMode : false; // true = commented, false = clean
     } catch {
       // VCM missing/unreadable -> just fall back to "does this file have comments?"
       const vcmObjects = parseDocComs(doc.getText(), doc.uri.path);

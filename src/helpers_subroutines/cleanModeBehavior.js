@@ -19,15 +19,12 @@ async function cleanModeBehavior({
   saveVCM,
   vcmFileExists,
   vcmDir,
-  readVCM
+  readVCM,
+  contextComments
 }) {
-  const liveSync = config.get("liveSync", false);
-  const vcmExists = await vcmFileExists(vcmDir, relativePath);
-  if (!vcmExists || !liveSync) {
-    await saveVCM(doc, true);
-  }
+  await saveVCM(doc, true);
   const comments = await readVCM(relativePath, vcmDir);
-  const newText = stripComments(text, doc.uri.path, comments);
+  const newText = stripComments(text, doc.uri.path, comments, { contextComments });
   return newText;
 }
 

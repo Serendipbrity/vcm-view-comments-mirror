@@ -1,6 +1,7 @@
 const vscode = require("vscode");
-const { buildContextKey } = require("../utils_copycode/buildContextKey");
 const { findCommentAtCursor } = require("../utils_copycode/findCommentAtCursor");
+const { addPrimaryAnchors } = require("../vcm/utils_copycode/parseDocComs");
+const { isSameComment } = require("../utils_copycode/isSameComment");
 
 /**
  * Check if a comment is marked as alwaysShow
@@ -26,7 +27,18 @@ async function updateAlwaysShowContext({ readBothVCMs, parseDocComs }) {
 
     try {
       // Extract current comments and find the one at cursor position
-      const docComments = parseDocComs(doc.getText(), doc.uri.path);
+      const docText = doc.getText();
+      const docLines = docText.split("\n");
+      const docComments = parseDocComs(docText, doc.uri.path);
+
+      // Load VCM comments to check flags
+      const { allComments: comments } = await readBothVCMs(relativePath);
+
+      let isAlwaysShowFlag = false;
+      let isPrivate = false;
+
+      const privateComments = comments.filter(c => c.isPrivate);
+      addPrimaryAnchors(docComments, { lines: docLines });
 
       // Find the comment at the current cursor position
       const commentAtCursor = findCommentAtCursor(docComments, selectedLine);
@@ -46,21 +58,17 @@ async function updateAlwaysShowContext({ readBothVCMs, parseDocComs }) {
         return;
       }
 
-      // Load VCM comments to check flags
-      const { allComments: comments } = await readBothVCMs(relativePath);
-
-      let isAlwaysShowFlag = false;
-      let isPrivate = false;
-
-      const currentKey = buildContextKey(commentAtCursor);
-
-      // Check if any VCM comment with this context key has alwaysShow or isPrivate
+      // Check if any VCM comment matches and has alwaysShow
+      // alwaysShow comments are always in the doc, so isSameComment works directly
       for (const c of comments) {
-        const vcmKey = buildContextKey(c);
-        if (vcmKey === currentKey) {
-          if (isAlwaysShow(c)) isAlwaysShowFlag = true;
-          if (c.isPrivate) isPrivate = true;
+        if (isSameComment(c, commentAtCursor) && isAlwaysShow(c)) {
+          isAlwaysShowFlag = true;
+          break;
         }
+      }
+
+      if (privateComments.length > 0) {
+        isPrivate = privateComments.some((c) => isSameComment(c, commentAtCursor));
       }
 
       await vscode.commands.executeCommand('setContext', 'vcm.commentIsAlwaysShow', isAlwaysShowFlag);

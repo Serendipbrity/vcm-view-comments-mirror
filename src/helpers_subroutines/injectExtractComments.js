@@ -1,8 +1,14 @@
-const { getCommentMarkersForFile } = require("../utils_copycode/commentMarkers");
+const {
+  getCommentMarkersForFile,
+  getLineMarkersForFile,
+  getBlockMarkersForFile,
+} = require("../utils_copycode/commentMarkers");
 const { hashLine } = require("../utils_copycode/hash");
 const { isolateCodeLine, findInlineCommentStart } = require("../utils_copycode/lineUtils");
-const { parseDocComs } = require("../vcm/utils_copycode/parseDocComs");
+const { parseDocComs, addPrimaryAnchors } = require("../vcm/utils_copycode/parseDocComs");
 const { buildContextKey } = require("../utils_copycode/buildContextKey");
+const { getCommentText } = require("../utils_copycode/getCommentText");
+const { isSameComment } = require("../utils_copycode/isSameComment");
 const { isAlwaysShow } = require("./alwaysShow");
 
 /**
@@ -15,6 +21,9 @@ function injectComments(cleanText, filePath, comments = [], sharedVisible = true
   // split("\n") turns the code into an array of lines so you can loop by index.
   const lines = cleanText.split("\n");
   const result = [];  // Where you'll push lines and comments in order, then join back later.
+  const pushLine = (line) => {
+    result.push(line);
+  };
 
   // Get comment markers for this file type
   const commentMarkers = getCommentMarkersForFile(filePath);
@@ -55,9 +64,11 @@ function injectComments(cleanText, filePath, comments = [], sharedVisible = true
   for (const comment of commentsToInject) {
     let commentHash = null;
     if (comment.type === "line") {
-      commentHash = hashLine(comment.text.trim(), 0);
+      const lineText = (comment.text || "").trim();
+      if (lineText) commentHash = hashLine(lineText, 0);
     } else if (comment.type === "block" && comment.block && comment.block.length > 0) {
-      commentHash = hashLine(comment.block[0].text.trim(), 0);
+      const blockText = ((comment.block[0] && comment.block[0].text) || "").trim();
+      if (blockText) commentHash = hashLine(blockText, 0);
     }
 
     if (commentHash) {
@@ -65,6 +76,30 @@ function injectComments(cleanText, filePath, comments = [], sharedVisible = true
       // We'll use the anchor to find the position (will be refined later with actual injection order)
       if (!commentHashToPosition.has(commentHash)) {
         commentHashToPosition.set(commentHash, comment);
+      }
+    }
+  }
+
+  const shouldUsePrimaryAnchors = commentsToInject.some(
+    (c) => c.isPrivate && c.primaryAnchor
+  );
+  let existingCommentHashToIndices = null;
+  if (shouldUsePrimaryAnchors) {
+    existingCommentHashToIndices = new Map();
+    const existingComments = parseDocComs(cleanText, filePath);
+    for (const c of existingComments) {
+      const text = getCommentText(c);
+      if (!text) continue;
+      const hash = hashLine(text, 0);
+      if (!existingCommentHashToIndices.has(hash)) {
+        existingCommentHashToIndices.set(hash, []);
+      }
+      const indexToUse =
+        c.type === "block" && Array.isArray(c.block) && c.block.length > 0
+          ? c.block[0].commentedLineIndex
+          : c.commentedLineIndex;
+      if (indexToUse !== undefined) {
+        existingCommentHashToIndices.get(hash).push(indexToUse);
       }
     }
   }
@@ -89,7 +124,19 @@ function injectComments(cleanText, filePath, comments = [], sharedVisible = true
       return available[0]; // return that one. No need to score.
     }
 
-    // Build a list of possible line indices, each with a “score” indicating how well its context fits.
+    // Determine which prev/next hashes to use for scoring based on visibility context
+    let prevHashToUse = comment.prevHash;
+    let nextHashToUse = comment.nextHash;
+    let anchorToUse = comment.anchor;
+    const hasPrim = ((comment.primaryPrevHash !== undefined) || (comment.primaryNextHash !== undefined) || (comment.primaryAnchor !== undefined))
+    // Use primary hashes if available for private consecutive comments
+    if (comment.isPrivate && hasPrim) {
+      prevHashToUse = comment.primaryPrevHash;
+      nextHashToUse = comment.primaryNextHash;
+      anchorToUse = comment.primaryAnchor;
+    }
+
+    // Build a list of possible line indices, each with a "score" indicating how well its context fits.
     const scores = available.map(idx => {
       let score = 0;
 
@@ -114,14 +161,14 @@ function injectComments(cleanText, filePath, comments = [], sharedVisible = true
       // Compare these neighbor lines to the comment's stored hashes and score based on matching context
       // Add 10 points for each matching context hash.
       // Higher score = better contextual fit.
-      if (comment.prevHash && prevIdx >= 0) {
+      if (prevHashToUse && prevIdx >= 0) {
         const prevHash = hashLine(isolateCodeLine(lines[prevIdx], commentMarkers), 0);
-        if (prevHash === comment.prevHash) score += 10;
+        if (prevHash === prevHashToUse) score += 10;
       }
 
-      if (comment.nextHash && nextIdx >= 0) {
+      if (nextHashToUse && nextIdx >= 0) {
         const nextHash = hashLine(isolateCodeLine(lines[nextIdx], commentMarkers), 0);
-        if (nextHash === comment.nextHash) score += 10;
+        if (nextHash === nextHashToUse) score += 10;
       }
 
       // Calculate distance from original commentedLineIndex (if available) for tiebreaking
@@ -139,7 +186,9 @@ function injectComments(cleanText, filePath, comments = [], sharedVisible = true
 
   const blockComments = commentsToInject.filter(c => c.type === "block").sort((a, b) => (a.block?.[0]?.commentedLineIndex || 0) - (b.block?.[0]?.commentedLineIndex || 0));
 
-  const lineComments = commentsToInject.filter(c => c.type === "line").sort((a, b) => (a.commentedLineIndex || 0) - (b.commentedLineIndex || 0));
+  const lineComments = commentsToInject
+    .filter(c => c.type === "line")
+    .sort((a, b) => (a.commentedLineIndex || 0) - (b.commentedLineIndex || 0));
 
   const inlineComments = commentsToInject
     .filter(c => c.type === "inline")
@@ -183,7 +232,61 @@ function injectComments(cleanText, filePath, comments = [], sharedVisible = true
       indices = lineHashToIndices.get(block.anchor);
     }
 
-    if (!indices?.length) continue;
+    // If anchor not found (code line changed), use primary context hashes first (they include comments)
+    // Then fall back to non-primary hashes (code-only)
+    if (!indices?.length && block.isPrivate) {
+      // Try primaryPrevHash first - it points to the immediate prev line (comment or code)
+      if (block.primaryPrevHash) {
+        // Check if it's an existing comment
+        const prevCommentIndices = existingCommentHashToIndices?.get(block.primaryPrevHash);
+        if (prevCommentIndices?.length) {
+          // Found previous comment - inject after it (use last index in case of multi-line)
+          indices = [prevCommentIndices[prevCommentIndices.length - 1] + 1];
+        } else {
+          // Check if it's a code line
+          const prevCodeIndices = lineHashToIndices.get(block.primaryPrevHash);
+          if (prevCodeIndices?.length) {
+            indices = [prevCodeIndices[0] + 1];
+          }
+        }
+      }
+      // If primaryPrevHash didn't work, try primaryNextHash
+      if (!indices?.length && block.primaryNextHash) {
+        const nextCodeIndices = lineHashToIndices.get(block.primaryNextHash);
+        if (nextCodeIndices?.length) {
+          indices = [nextCodeIndices[0]];
+        }
+      }
+    }
+
+    // Fall back to non-primary context hashes (code-only)
+    if (!indices?.length && (block.prevHash || block.nextHash)) {
+      const prevIndices = block.prevHash ? lineHashToIndices.get(block.prevHash) : null;
+      const nextIndices = block.nextHash ? lineHashToIndices.get(block.nextHash) : null;
+
+      if (prevIndices?.length && nextIndices?.length) {
+        // Both prev and next found - comment should go between them
+        for (const prevIdx of prevIndices) {
+          for (const nextIdx of nextIndices) {
+            if (nextIdx > prevIdx) {
+              indices = [prevIdx + 1]; // Inject after prev line
+              break;
+            }
+          }
+          if (indices?.length) break;
+        }
+      } else if (prevIndices?.length) {
+        // Only prev found - inject after it
+        indices = [prevIndices[0] + 1];
+      } else if (nextIndices?.length) {
+        // Only next found - inject before it
+        indices = [nextIndices[0]];
+      }
+    }
+
+    if (!indices?.length) {
+      continue;
+    }
 
     const targetIndex = findBestMatch(block, indices, usedIndices);
     usedIndices.add(targetIndex); // Adds the target index to usedIndices (taken) so you don't double-assign it.
@@ -203,7 +306,7 @@ function injectComments(cleanText, filePath, comments = [], sharedVisible = true
     let anchorHash = null;
 
     // Use primaryAnchor for private consecutive comments
-    if (lineComment.isPrivate && lineComment.primaryAnchor) {
+    if (lineComment && lineComment.primaryAnchor) {
       anchorHash = lineComment.primaryAnchor;
       indices = lineHashToIndices.get(anchorHash);
 
@@ -222,6 +325,57 @@ function injectComments(cleanText, filePath, comments = [], sharedVisible = true
     // Fallback to code line anchor
     if (!indices?.length) {
       indices = lineHashToIndices.get(lineComment.anchor);
+    }
+
+    // If anchor not found (code line changed), use primary context hashes first (they include comments)
+    if (!indices?.length && lineComment.isPrivate) {
+      // Try primaryPrevHash first - it points to the immediate prev line (comment or code)
+      if (lineComment.primaryPrevHash) {
+        // Check if it's an existing comment
+        const prevCommentIndices = existingCommentHashToIndices?.get(lineComment.primaryPrevHash);
+        if (prevCommentIndices?.length) {
+          // Found previous comment - inject after it
+          indices = [prevCommentIndices[prevCommentIndices.length - 1] + 1];
+        } else {
+          // Check if it's a code line
+          const prevCodeIndices = lineHashToIndices.get(lineComment.primaryPrevHash);
+          if (prevCodeIndices?.length) {
+            indices = [prevCodeIndices[0] + 1];
+          }
+        }
+      }
+      // If primaryPrevHash didn't work, try primaryNextHash
+      if (!indices?.length && lineComment.primaryNextHash) {
+        const nextCodeIndices = lineHashToIndices.get(lineComment.primaryNextHash);
+        if (nextCodeIndices?.length) {
+          indices = [nextCodeIndices[0]];
+        }
+      }
+    }
+
+    // Fall back to non-primary context hashes (code-only)
+    if (!indices?.length && (lineComment.prevHash || lineComment.nextHash)) {
+      const prevIndices = lineComment.prevHash ? lineHashToIndices.get(lineComment.prevHash) : null;
+      const nextIndices = lineComment.nextHash ? lineHashToIndices.get(lineComment.nextHash) : null;
+
+      if (prevIndices?.length && nextIndices?.length) {
+        // Both prev and next found - comment should go between them
+        for (const prevIdx of prevIndices) {
+          for (const nextIdx of nextIndices) {
+            if (nextIdx > prevIdx) {
+              indices = [prevIdx + 1]; // Inject after prev line
+              break;
+            }
+          }
+          if (indices?.length) break;
+        }
+      } else if (prevIndices?.length) {
+        // Only prev found - inject after it
+        indices = [prevIndices[0] + 1];
+      } else if (nextIndices?.length) {
+        // Only next found - inject before it
+        indices = [nextIndices[0]];
+      }
     }
 
     if (!indices?.length) continue;
@@ -244,52 +398,135 @@ function injectComments(cleanText, filePath, comments = [], sharedVisible = true
     inlineMap.get(targetIndex).push(inline);
   }
 
+  const injectAtIndex = new Map();
+  const anchorIndices = new Set([...blockMap.keys(), ...lineMap.keys()]);
+
+  const stripTrailingBlankLines = (lineObjects) => {
+    if (!Array.isArray(lineObjects)) return lineObjects;
+    let end = lineObjects.length;
+    while (end > 0) {
+      const lineObj = lineObjects[end - 1];
+      const text = typeof lineObj === "string"
+        ? lineObj
+        : lineObj && typeof lineObj.text === "string"
+          ? lineObj.text
+          : "";
+      if (text.trim() === "") {
+        end--;
+        continue;
+      }
+      break;
+    }
+    return lineObjects.slice(0, end);
+  };
+
+  const getLineText = (lineObj) => {
+    if (typeof lineObj === "string") return lineObj;
+    if (lineObj && typeof lineObj.text === "string") return lineObj.text;
+    return "";
+  };
+
+  for (const anchorIndex of anchorIndices) {
+    const blocks = blockMap.get(anchorIndex);
+    const lineCommentsAbove = lineMap.get(anchorIndex);
+    const injectItems = [];
+
+    if (blocks) {
+      for (const block of blocks) {
+        const orderIndex = Array.isArray(block.block) && block.block.length > 0
+          ? block.block[0].commentedLineIndex
+          : block.commentedLineIndex;
+        injectItems.push({ kind: "block", orderIndex, comment: block, anchorIndex });
+      }
+    }
+
+    if (lineCommentsAbove) {
+      for (const lineComment of lineCommentsAbove) {
+        injectItems.push({
+          kind: "line",
+          orderIndex: lineComment.commentedLineIndex,
+          comment: lineComment,
+          anchorIndex,
+        });
+      }
+    }
+
+    injectItems.sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
+
+    if (injectItems.length === 0) continue;
+
+    let existingBlankBeforeAnchor = 0;
+    for (let j = anchorIndex - 1; j >= 0; j--) {
+      if (lines[j].trim()) break;
+      existingBlankBeforeAnchor += 1;
+    }
+
+    let cumulativeAfter = 0;
+    for (let idx = injectItems.length - 1; idx >= 0; idx--) {
+      const item = injectItems[idx];
+      const spacingAfter = Number.isInteger(item.comment.spacingAfter)
+        ? item.comment.spacingAfter
+        : 0;
+      cumulativeAfter += spacingAfter;
+      const insertShift = Math.min(existingBlankBeforeAnchor, cumulativeAfter);
+      const insertIndex = anchorIndex - insertShift;
+      if (!injectAtIndex.has(insertIndex)) {
+        injectAtIndex.set(insertIndex, []);
+      }
+      injectAtIndex.get(insertIndex).push(item);
+    }
+  }
+
   // Rebuild the file line by line
   // Iterate through every line of clean code
   // i represents both position in original clean code and potential anchor target for comments.
   for (let i = 0; i < lines.length; i++) {
-    // STEP 1: Insert any block comments anchored to this line
-    // blocks maps anchor index → block comment(s) that should appear above this code line.
-    const blocks = blockMap.get(i);
-    const lineCommentsAbove = lineMap.get(i);
-    // Handle the case of multiple comment blocks anchored to the same code line (stacked).
-    if (blocks) {
-      for (const block of blocks) {
-        // Determine which version to inject: text_cleanMode (if different) or block
-        const hasTextCleanMode = Array.isArray(block.text_cleanMode);
-        const cleanModeTexts = hasTextCleanMode ? block.text_cleanMode.map(b => b.text).join("\n") : "";
-        const blockTexts = Array.isArray(block.block) ? block.block.map(b => b.text).join("\n") : "";
-        const blocksIdentical = hasTextCleanMode && Array.isArray(block.block) && cleanModeTexts === blockTexts;
-
-        let linesToInject = [];
-        if (hasTextCleanMode && !blocksIdentical) 
-          // Use text_cleanMode (newly typed version)
-          linesToInject = block.text_cleanMode;
-        else if (Array.isArray(block.block)) linesToInject = block.block;
-
-        // Inject all lines from the block (includes leading blanks, comments, and trailing blanks)
-        for (const lineObj of linesToInject) {
-          result.push(lineObj.text);
-        }
-      }
+    // STEP 1: Insert any block/line comments anchored to this line in original order
+    const injectItems = injectAtIndex.get(i);
+    if (injectItems) {
+      injectItems.sort(
+        (a, b) => (a.anchorIndex - b.anchorIndex) || (a.orderIndex || 0) - (b.orderIndex || 0)
+      );
     }
 
-    // STEP 2: Insert any line comments anchored to this line
-    if (lineCommentsAbove) {
-      for (const lineComment of lineCommentsAbove) {
-        // Determine which version to inject: text_cleanMode or text
-        const hasTextCleanMode = typeof lineComment.text_cleanMode === "string";
-        const textsIdentical = hasTextCleanMode && lineComment.text === lineComment.text_cleanMode;
+    for (let idx = 0; idx < (injectItems || []).length; idx++) {
+      const item = injectItems[idx];
+      // No-op: spacing is preserved from the source text.
 
-        let textToInject = "";
-        if (hasTextCleanMode && !textsIdentical) {
-          textToInject = lineComment.text_cleanMode;
-        } else if (lineComment.text !== undefined) {
-          textToInject = lineComment.text;
+      if (item.kind === "block") {
+        const block = item.comment;
+        // Inject text_cleanMode (if present and different), then original block.
+        const hasTextCleanMode = Array.isArray(block.text_cleanMode);
+        const hasBlock = Array.isArray(block.block);
+        const cleanModeBlock = stripTrailingBlankLines(block.text_cleanMode);
+        const fullBlock = stripTrailingBlankLines(block.block);
+        const cleanModeTexts = hasTextCleanMode ? cleanModeBlock.map(getLineText).join("\n") : "";
+        const blockTexts = hasBlock ? fullBlock.map(getLineText).join("\n") : "";
+        const blocksIdentical = hasTextCleanMode && hasBlock && cleanModeTexts === blockTexts;
+
+        if (hasTextCleanMode && !blocksIdentical) {
+          for (const lineObj of cleanModeBlock) {
+            pushLine(getLineText(lineObj));
+          }
         }
+        if (hasBlock) {
+          for (const lineObj of fullBlock) {
+            pushLine(getLineText(lineObj));
+          }
+        }
+      } else {
+        const lineComment = item.comment;
+        // Inject text_cleanMode (if present and different), then original line comment.
+        const hasTextCleanMode = typeof lineComment.text_cleanMode === "string";
+        const hasText = lineComment.text !== undefined;
+        const textsIdentical = hasTextCleanMode && hasText && lineComment.text === lineComment.text_cleanMode;
 
-        // Always inject, even if blank (preserves spacing within comment groups)
-        result.push(textToInject);
+        if (hasTextCleanMode && !textsIdentical) {
+          pushLine(lineComment.text_cleanMode);
+        }
+        if (hasText) {
+          pushLine(lineComment.text);
+        }
       }
     }
 
@@ -300,25 +537,23 @@ function injectComments(cleanText, filePath, comments = [], sharedVisible = true
       // If multiple inlines on same line, you probably want to append all.
       // Current behavior: first only (preserving your existing behavior).
       const inline = inlines[0];
-      // Combine text_cleanMode (string) and text
+      // Combine text (hidden) and text_cleanMode (added in clean mode)
       let commentText = "";
       const hasTextCleanMode = typeof inline.text_cleanMode === "string";
       const textsIdentical = hasTextCleanMode && inline.text === inline.text_cleanMode;
 
+      if (inline.text) {
+        commentText += inline.text;
+      }
       if (hasTextCleanMode && !textsIdentical) {
         commentText += inline.text_cleanMode;
-      }
-
-      // Add original text (only if no text_cleanMode or they're identical)
-      if (inline.text && (!hasTextCleanMode || textsIdentical)) {
-        commentText += inline.text;
       }
 
       if (commentText) {
         line += commentText;
       }
     }
-    result.push(line);
+    pushLine(line);
   }
 
   return result.join("\n");
@@ -329,47 +564,129 @@ function injectComments(cleanText, filePath, comments = [], sharedVisible = true
  * - Does NOT strip arbitrary syntax comments.
  * - Does NOT need alwaysShow passed in; it ignores alwaysShow internally anyway.
  */
-function stripComments(text, filePath, vcmComments = []) {
+function stripComments(text, filePath, vcmComments = [], options = {}) {
   // Get comment markers for this file type from our centralized config
   const commentMarkers = getCommentMarkersForFile(filePath);
+  const lineMarkers = getLineMarkersForFile(filePath);
+  const blockMarkers = getBlockMarkersForFile(filePath);
+  const lines = text.split("\n");
+  const commentOnlyLines = new Set();
+  let inBlock = false;
+  let blockEnd = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (inBlock) {
+      commentOnlyLines.add(i);
+      const endIdx = line.indexOf(blockEnd);
+      if (endIdx >= 0) {
+        inBlock = false;
+        blockEnd = null;
+      }
+      continue;
+    }
+
+    for (const { start, end } of blockMarkers) {
+      const idx = line.indexOf(start);
+      if (idx >= 0) {
+        const isCommentOnlyStart = line.slice(0, idx).trim().length === 0;
+        const endIdx = line.indexOf(end, idx + start.length);
+        if (endIdx >= 0) {
+          if (isCommentOnlyStart) commentOnlyLines.add(i);
+        } else {
+          if (isCommentOnlyStart) commentOnlyLines.add(i);
+          inBlock = true;
+          blockEnd = end;
+        }
+        break;
+      }
+    }
+
+    if (!commentOnlyLines.has(i)) {
+      for (const marker of lineMarkers) {
+        if (trimmed.startsWith(marker)) {
+          commentOnlyLines.add(i);
+          break;
+        }
+      }
+    }
+  }
 
   // Keys we intend to strip (explicit targets only)
   // alwaysShow is never stripped, ever.
-  const stripKeys = new Set(
-    (vcmComments || [])
-      .filter(c => !isAlwaysShow(c))             // never target alwaysShow
-      .map(c => buildContextKey(c))              // stable identity
+  const alwaysShowTargets = (vcmComments || []).filter((c) => isAlwaysShow(c));
+  const stripTargets = (vcmComments || []).filter(
+    (c) => !isAlwaysShow(c) && !alwaysShowTargets.some((a) => isSameComment(a, c))
   );
+  const usePrimaryMatching = stripTargets.some(
+    c => c.isPrivate && c.primaryPrevHash !== undefined
+  );
+  const stripKeys = usePrimaryMatching
+    ? null
+    : new Set(stripTargets.map(c => buildContextKey(c)));
 
   // Nothing to do
-  if (stripKeys.size === 0) return text;
+  if ((!stripKeys || stripKeys.size === 0) && stripTargets.length === 0) return text;
 
   // # TODO revisit this for the spacing stuff
   // Extract current comments to identify blank lines within comment blocks
   // Pass vcmComments and mode so blank line extraction works correctly
   const docComments = parseDocComs(text, filePath);
+  addPrimaryAnchors(docComments, { lines });
+
+  const getCommentRange = (comment) => {
+    if (comment.type === "block" && Array.isArray(comment.block)) {
+      const indices = comment.block
+        .map((b) => b && b.commentedLineIndex)
+        .filter((idx) => typeof idx === "number");
+      if (indices.length > 0) {
+        return { start: Math.min(...indices), end: Math.max(...indices) };
+      }
+    }
+
+    if (typeof comment.commentedLineIndex === "number") {
+      return { start: comment.commentedLineIndex, end: comment.commentedLineIndex };
+    }
+
+    return { start: -1, end: -1 };
+  };
 
   // Track:
   // - Entire lines to remove (block comment lines + blank lines that are part of those parsed blocks)
   // - Inline strips: lineIndex -> commentStartPos (char index where inline comment begins)
   const linesToRemove = new Set();
   const inlineStripAt = new Map(); // lineIndex -> commentStartIdx
+  const strippedDocRanges = [];
 
   for (const current of docComments) {
-    const key = buildContextKey(current);
-    if (!stripKeys.has(key)) continue; // this comment is NOT targeted, leave it
+    if (alwaysShowTargets.some((a) => isSameComment(a, current))) {
+      continue;
+    }
+    if (usePrimaryMatching) {
+      const matchesTarget = stripTargets.some(t => isSameComment(t, current));
+      if (!matchesTarget) continue;
+    } else {
+      const key = buildContextKey(current);
+      if (!stripKeys.has(key)) continue; // this comment is NOT targeted, leave it
+    }
 
     if (current.type === "block" && Array.isArray(current.block)) {
-      // Remove only this parsed block's lines (including blanks within the parsed block)
+      // Remove only this parsed block's lines (skip blank lines above/below comment stacks)
       for (const b of current.block) {
-        linesToRemove.add(b.commentedLineIndex);
+        const lineIndex = b.commentedLineIndex;
+        if (typeof lineIndex !== "number") continue;
+        linesToRemove.add(lineIndex);
       }
+      strippedDocRanges.push(getCommentRange(current));
       continue;
     }
 
     if (current.type === "line") {
-      // Remove this standalone line comment
+      // Remove this standalone line comment (spacing only when between comments)
       linesToRemove.add(current.commentedLineIndex);
+      strippedDocRanges.push(getCommentRange(current));
       continue;
     }
 
@@ -377,14 +694,14 @@ function stripComments(text, filePath, vcmComments = []) {
       // Remove only the inline segment on that line (keep code portion)
       // Use real marker finder to avoid stripping marker inside strings.
       const lineIndex = current.commentedLineIndex;
-      const lineText = text.split("\n")[lineIndex] ?? "";
+      const lineText = lines[lineIndex] ?? "";
 
       const commentStartIdx = findInlineCommentStart(lineText, commentMarkers, {
         requireWhitespaceBefore: true,
       });
 
-      // Only strip if we can locate the marker start
-      if (commentStartIdx >= 0) {
+      // Only strip if marker is after some code (inline should have code before)
+      if (commentStartIdx > 0 && lineText.slice(0, commentStartIdx).trim()) {
         // If multiple targeted inline comments somehow map to same line, keep earliest strip position
         const existing = inlineStripAt.get(lineIndex);
         if (existing === undefined || commentStartIdx < existing) {
@@ -394,8 +711,11 @@ function stripComments(text, filePath, vcmComments = []) {
     }
   }
 
+  if (strippedDocRanges.length > 1) {
+    // Intentionally keep blank lines in place; only comment lines are removed.
+  }
+
   // Apply removals
-  const lines = text.split("\n");
   const out = [];
 
   for (let i = 0; i < lines.length; i++) {
