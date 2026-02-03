@@ -207,6 +207,7 @@ function parseDocComs(text, filePath) {
           anchorText,
           nextHashText,
           insertAbove: true,
+          commentedLineIndex: blockCommentBuffer[0]?.commentedLineIndex,
         });
 
         blockCommentBuffer = [];
@@ -280,6 +281,7 @@ function parseDocComs(text, filePath) {
           anchorText,
           nextHashText,
           insertAbove: true,
+          commentedLineIndex: blockArray[0]?.commentedLineIndex,
         });
         continue;
       } else {

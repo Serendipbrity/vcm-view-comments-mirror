@@ -83,10 +83,15 @@ function injectComments(cleanText, filePath, comments = [], sharedVisible = true
   const shouldUsePrimaryAnchors = commentsToInject.some(
     (c) => c.isPrivate && c.primaryAnchor
   );
+  let existingCommentsByPrimaryKey = null;
+  let existingCommentsByKey = null;
   let existingCommentHashToIndices = null;
   if (shouldUsePrimaryAnchors) {
     existingCommentHashToIndices = new Map();
+    existingCommentsByPrimaryKey = new Map();
+    existingCommentsByKey = new Map();
     const existingComments = parseDocComs(cleanText, filePath);
+    addPrimaryAnchors(existingComments, { lines });
     for (const c of existingComments) {
       const text = getCommentText(c);
       if (!text) continue;
@@ -101,6 +106,20 @@ function injectComments(cleanText, filePath, comments = [], sharedVisible = true
       if (indexToUse !== undefined) {
         existingCommentHashToIndices.get(hash).push(indexToUse);
       }
+      // Build map by full primary context key
+      if (c.primaryAnchor !== undefined) {
+        const primaryKey = buildContextKey(c, { usePrimaryAnchor: true });
+        if (!existingCommentsByPrimaryKey.has(primaryKey)) {
+          existingCommentsByPrimaryKey.set(primaryKey, []);
+        }
+        existingCommentsByPrimaryKey.get(primaryKey).push({ comment: c, index: indexToUse });
+      }
+      // Build map by full non-primary context key
+      const key = buildContextKey(c, { usePrimaryAnchor: false });
+      if (!existingCommentsByKey.has(key)) {
+        existingCommentsByKey.set(key, []);
+      }
+      existingCommentsByKey.get(key).push({ comment: c, index: indexToUse });
     }
   }
 
@@ -127,13 +146,11 @@ function injectComments(cleanText, filePath, comments = [], sharedVisible = true
     // Determine which prev/next hashes to use for scoring based on visibility context
     let prevHashToUse = comment.prevHash;
     let nextHashToUse = comment.nextHash;
-    let anchorToUse = comment.anchor;
     const hasPrim = ((comment.primaryPrevHash !== undefined) || (comment.primaryNextHash !== undefined) || (comment.primaryAnchor !== undefined))
-    // Use primary hashes if available for private consecutive comments
-    if (comment.isPrivate && hasPrim) {
+    // Use primary hashes if available for consecutive comments
+    if (hasPrim) {
       prevHashToUse = comment.primaryPrevHash;
       nextHashToUse = comment.primaryNextHash;
-      anchorToUse = comment.primaryAnchor;
     }
 
     // Build a list of possible line indices, each with a "score" indicating how well its context fits.
@@ -208,54 +225,72 @@ function injectComments(cleanText, filePath, comments = [], sharedVisible = true
   // Loops through every block comment that needs to be inserted.
   for (const block of blockComments) {
     let indices = null;
-    let anchorHash = null;
 
-    // Use primaryAnchor for private consecutive comments
-    if (block.isPrivate && block.primaryAnchor) {
-      anchorHash = block.primaryAnchor;
-      indices = lineHashToIndices.get(anchorHash);
-
-      if (!indices?.length && existingCommentHashToIndices?.has(anchorHash)) {
-        indices = existingCommentHashToIndices.get(anchorHash);
+    // For comments with primary fields, try to match by full primary context key first
+    // This ensures we find the exact position even when individual hashes might match multiple locations
+    if (block.primaryAnchor !== undefined && existingCommentsByPrimaryKey) {
+      const primaryKey = buildContextKey(block, { usePrimaryAnchor: true });
+      const matches = existingCommentsByPrimaryKey.get(primaryKey);
+      if (matches?.length) {
+        // Found exact match by primary context key - inject at that comment's position
+        indices = [matches[0].index];
       }
+    }
 
-      // If not found in clean text, check if it's a comment being injected
-      if (!indices?.length && commentHashToPosition.has(anchorHash)) {
-        const targetComment = commentHashToPosition.get(anchorHash);
-        // Use the target comment's anchor to find injection position
+    // If no primary key match, try primaryAnchor as code line or existing comment
+    if (!indices?.length && block.primaryAnchor) {
+      indices = lineHashToIndices.get(block.primaryAnchor);
+      if (!indices?.length && existingCommentHashToIndices?.has(block.primaryAnchor)) {
+        indices = existingCommentHashToIndices.get(block.primaryAnchor);
+      }
+      // If not found, check if it's a comment being injected
+      if (!indices?.length && commentHashToPosition.has(block.primaryAnchor)) {
+        const targetComment = commentHashToPosition.get(block.primaryAnchor);
         indices = lineHashToIndices.get(targetComment.anchor);
       }
     }
 
-    // Fallback to code line anchor
-    if (!indices?.length) {
-      indices = lineHashToIndices.get(block.anchor);
+    // Fall back to primary context hashes (can be comments or code)
+    // Same logic as non-primary fallback, but checks both code lines and existing comments
+    if (!indices?.length && (block.primaryPrevHash || block.primaryNextHash)) {
+      // Find primaryPrevHash - could be code or comment
+      let prevIndices = block.primaryPrevHash ? lineHashToIndices.get(block.primaryPrevHash) : null;
+      if (!prevIndices?.length && block.primaryPrevHash && existingCommentHashToIndices?.has(block.primaryPrevHash)) {
+        prevIndices = existingCommentHashToIndices.get(block.primaryPrevHash);
+      }
+
+      // Find primaryNextHash - could be code or comment
+      let nextIndices = block.primaryNextHash ? lineHashToIndices.get(block.primaryNextHash) : null;
+      if (!nextIndices?.length && block.primaryNextHash && existingCommentHashToIndices?.has(block.primaryNextHash)) {
+        nextIndices = existingCommentHashToIndices.get(block.primaryNextHash);
+      }
+
+      if (prevIndices?.length && nextIndices?.length) {
+        // Both prev and next found - comment should go between them
+        for (const prevIdx of prevIndices) {
+          for (const nextIdx of nextIndices) {
+            if (nextIdx > prevIdx) {
+              indices = [prevIdx + 1];
+              break;
+            }
+          }
+          if (indices?.length) break;
+        }
+      } else if (prevIndices?.length) {
+        // Only prev found - inject after it
+        indices = [prevIndices[prevIndices.length - 1] + 1];
+      } else if (nextIndices?.length) {
+        // Only next found - inject before it
+        indices = [nextIndices[0]];
+      }
     }
 
-    // If anchor not found (code line changed), use primary context hashes first (they include comments)
-    // Then fall back to non-primary hashes (code-only)
-    if (!indices?.length && block.isPrivate) {
-      // Try primaryPrevHash first - it points to the immediate prev line (comment or code)
-      if (block.primaryPrevHash) {
-        // Check if it's an existing comment
-        const prevCommentIndices = existingCommentHashToIndices?.get(block.primaryPrevHash);
-        if (prevCommentIndices?.length) {
-          // Found previous comment - inject after it (use last index in case of multi-line)
-          indices = [prevCommentIndices[prevCommentIndices.length - 1] + 1];
-        } else {
-          // Check if it's a code line
-          const prevCodeIndices = lineHashToIndices.get(block.primaryPrevHash);
-          if (prevCodeIndices?.length) {
-            indices = [prevCodeIndices[0] + 1];
-          }
-        }
-      }
-      // If primaryPrevHash didn't work, try primaryNextHash
-      if (!indices?.length && block.primaryNextHash) {
-        const nextCodeIndices = lineHashToIndices.get(block.primaryNextHash);
-        if (nextCodeIndices?.length) {
-          indices = [nextCodeIndices[0]];
-        }
+    // Fallback to full non-primary context key
+    if (!indices?.length && existingCommentsByKey) {
+      const key = buildContextKey(block, { usePrimaryAnchor: false });
+      const matches = existingCommentsByKey.get(key);
+      if (matches?.length) {
+        indices = [matches[0].index];
       }
     }
 
@@ -303,53 +338,69 @@ function injectComments(cleanText, filePath, comments = [], sharedVisible = true
 
   for (const lineComment of lineComments) {
     let indices = null;
-    let anchorHash = null;
 
-    // Use primaryAnchor for private consecutive comments
-    if (lineComment && lineComment.primaryAnchor) {
-      anchorHash = lineComment.primaryAnchor;
-      indices = lineHashToIndices.get(anchorHash);
-
-      if (!indices?.length && existingCommentHashToIndices?.has(anchorHash)) {
-        indices = existingCommentHashToIndices.get(anchorHash);
+    // For comments with primary fields, try to match by full primary context key first
+    if (lineComment.primaryAnchor !== undefined && existingCommentsByPrimaryKey) {
+      const primaryKey = buildContextKey(lineComment, { usePrimaryAnchor: true });
+      const matches = existingCommentsByPrimaryKey.get(primaryKey);
+      if (matches?.length) {
+        indices = [matches[0].index];
       }
+    }
 
-      // If not found in clean text, check if it's a comment being injected
-      if (!indices?.length && commentHashToPosition.has(anchorHash)) {
-        const targetComment = commentHashToPosition.get(anchorHash);
-        // Use the target comment's anchor to find injection position
+    // If no primary key match, try primaryAnchor as code line or existing comment
+    if (!indices?.length && lineComment.primaryAnchor) {
+      indices = lineHashToIndices.get(lineComment.primaryAnchor);
+      if (!indices?.length && existingCommentHashToIndices?.has(lineComment.primaryAnchor)) {
+        indices = existingCommentHashToIndices.get(lineComment.primaryAnchor);
+      }
+      // If not found, check if it's a comment being injected
+      if (!indices?.length && commentHashToPosition.has(lineComment.primaryAnchor)) {
+        const targetComment = commentHashToPosition.get(lineComment.primaryAnchor);
         indices = lineHashToIndices.get(targetComment.anchor);
       }
     }
 
-    // Fallback to code line anchor
-    if (!indices?.length) {
-      indices = lineHashToIndices.get(lineComment.anchor);
+    // Fall back to primary context hashes (can be comments or code)
+    if (!indices?.length && (lineComment.primaryPrevHash || lineComment.primaryNextHash)) {
+      // Find primaryPrevHash - could be code or comment
+      let prevIndices = lineComment.primaryPrevHash ? lineHashToIndices.get(lineComment.primaryPrevHash) : null;
+      if (!prevIndices?.length && lineComment.primaryPrevHash && existingCommentHashToIndices?.has(lineComment.primaryPrevHash)) {
+        prevIndices = existingCommentHashToIndices.get(lineComment.primaryPrevHash);
+      }
+
+      // Find primaryNextHash - could be code or comment
+      let nextIndices = lineComment.primaryNextHash ? lineHashToIndices.get(lineComment.primaryNextHash) : null;
+      if (!nextIndices?.length && lineComment.primaryNextHash && existingCommentHashToIndices?.has(lineComment.primaryNextHash)) {
+        nextIndices = existingCommentHashToIndices.get(lineComment.primaryNextHash);
+      }
+
+      if (prevIndices?.length && nextIndices?.length) {
+        // Both prev and next found - comment should go between them
+        for (const prevIdx of prevIndices) {
+          for (const nextIdx of nextIndices) {
+            if (nextIdx > prevIdx) {
+              indices = [prevIdx + 1];
+              break;
+            }
+          }
+          if (indices?.length) break;
+        }
+      } else if (prevIndices?.length) {
+        // Only prev found - inject after it
+        indices = [prevIndices[prevIndices.length - 1] + 1];
+      } else if (nextIndices?.length) {
+        // Only next found - inject before it
+        indices = [nextIndices[0]];
+      }
     }
 
-    // If anchor not found (code line changed), use primary context hashes first (they include comments)
-    if (!indices?.length && lineComment.isPrivate) {
-      // Try primaryPrevHash first - it points to the immediate prev line (comment or code)
-      if (lineComment.primaryPrevHash) {
-        // Check if it's an existing comment
-        const prevCommentIndices = existingCommentHashToIndices?.get(lineComment.primaryPrevHash);
-        if (prevCommentIndices?.length) {
-          // Found previous comment - inject after it
-          indices = [prevCommentIndices[prevCommentIndices.length - 1] + 1];
-        } else {
-          // Check if it's a code line
-          const prevCodeIndices = lineHashToIndices.get(lineComment.primaryPrevHash);
-          if (prevCodeIndices?.length) {
-            indices = [prevCodeIndices[0] + 1];
-          }
-        }
-      }
-      // If primaryPrevHash didn't work, try primaryNextHash
-      if (!indices?.length && lineComment.primaryNextHash) {
-        const nextCodeIndices = lineHashToIndices.get(lineComment.primaryNextHash);
-        if (nextCodeIndices?.length) {
-          indices = [nextCodeIndices[0]];
-        }
+    // Fallback to full non-primary context key
+    if (!indices?.length && existingCommentsByKey) {
+      const key = buildContextKey(lineComment, { usePrimaryAnchor: false });
+      const matches = existingCommentsByKey.get(key);
+      if (matches?.length) {
+        indices = [matches[0].index];
       }
     }
 
@@ -389,8 +440,46 @@ function injectComments(cleanText, filePath, comments = [], sharedVisible = true
     lineMap.get(targetIndex).push(lineComment);
   }
 
+  const addAdjacentCodeLine = (startIdx, step, out) => {
+    for (let j = startIdx; j >= 0 && j < lines.length; j += step) {
+      if (lines[j].trim()) {
+        out.add(j);
+        return;
+      }
+    }
+  };
+
   for (const inline of inlineComments) {
-    const indices = lineHashToIndices.get(inline.anchor);
+    const candidateIndices = new Set();
+
+    if (inline.anchor) {
+      const anchorIndices = lineHashToIndices.get(inline.anchor);
+      if (anchorIndices?.length) {
+        anchorIndices.forEach((idx) => candidateIndices.add(idx));
+      }
+    }
+
+    if (candidateIndices.size === 0 && (inline.prevHash || inline.nextHash)) {
+      const prevIndices = inline.prevHash ? lineHashToIndices.get(inline.prevHash) : null;
+      const nextIndices = inline.nextHash ? lineHashToIndices.get(inline.nextHash) : null;
+
+      if (prevIndices?.length && nextIndices?.length) {
+        for (const prevIdx of prevIndices) {
+          for (const nextIdx of nextIndices) {
+            if (nextIdx <= prevIdx) continue;
+            for (let j = prevIdx + 1; j < nextIdx; j++) {
+              if (lines[j].trim()) candidateIndices.add(j);
+            }
+          }
+        }
+      } else if (prevIndices?.length) {
+        prevIndices.forEach((idx) => addAdjacentCodeLine(idx + 1, 1, candidateIndices));
+      } else if (nextIndices?.length) {
+        nextIndices.forEach((idx) => addAdjacentCodeLine(idx - 1, -1, candidateIndices));
+      }
+    }
+
+    const indices = candidateIndices.size > 0 ? Array.from(candidateIndices) : null;
     if (!indices?.length) continue;
 
     const targetIndex = findBestMatch(inline, indices, usedIndices);
@@ -620,6 +709,12 @@ function stripComments(text, filePath, vcmComments = [], options = {}) {
   const stripTargets = (vcmComments || []).filter(
     (c) => !isAlwaysShow(c) && !alwaysShowTargets.some((a) => isSameComment(a, c))
   );
+  const inlineLineTargets = new Set(
+    stripTargets
+      .filter((c) => c.type === "inline")
+      .map((c) => c.commentedLineIndex)
+      .filter((idx) => typeof idx === "number")
+  );
   const usePrimaryMatching = stripTargets.some(
     c => c.isPrivate && c.primaryPrevHash !== undefined
   );
@@ -664,13 +759,22 @@ function stripComments(text, filePath, vcmComments = [], options = {}) {
     if (alwaysShowTargets.some((a) => isSameComment(a, current))) {
       continue;
     }
+    let matchesTarget = false;
     if (usePrimaryMatching) {
-      const matchesTarget = stripTargets.some(t => isSameComment(t, current));
-      if (!matchesTarget) continue;
+      matchesTarget = stripTargets.some(t => isSameComment(t, current));
     } else {
-      const key = buildContextKey(current);
-      if (!stripKeys.has(key)) continue; // this comment is NOT targeted, leave it
+      if (
+        current.type === "inline" &&
+        typeof current.commentedLineIndex === "number" &&
+        inlineLineTargets.has(current.commentedLineIndex)
+      ) {
+        matchesTarget = true;
+      } else {
+        const key = buildContextKey(current);
+        if (stripKeys.has(key)) matchesTarget = true;
+      }
     }
+    if (!matchesTarget) continue;
 
     if (current.type === "block" && Array.isArray(current.block)) {
       // Remove only this parsed block's lines (skip blank lines above/below comment stacks)

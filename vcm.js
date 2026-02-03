@@ -367,6 +367,7 @@ async function activate(context) {
       vcmComments: sharedVCMComments,
       isPrivateMode: false,
       wasJustInjected,
+      allowSpacingUpdate: isCommented === true,
     });
 
     // Keep your empty-comment filter if you want (shared only)
@@ -456,6 +457,8 @@ async function activate(context) {
         privateVCMComments.map(c => getCommentText(c)).filter(Boolean)
       );
       const privateDocComments = docComments.filter(c => {
+        const hasPrimary = c.primaryAnchor !== undefined || c.primaryPrevHash !== undefined || c.primaryNextHash !== undefined;
+        if (privateKeys.has(buildContextKey(c, { usePrimaryAnchor: hasPrimary }))) return true;
         if (privateVCMComments.some(p => isSameComment(p, c))) return true;
         const textKey = getCommentText(c);
         return textKey && privateTextSet.has(textKey);
@@ -467,6 +470,7 @@ async function activate(context) {
         vcmComments: privateVCMComments,
         isPrivateMode: true,
         wasJustInjected: wasJustInjectedPrivate,
+        allowSpacingUpdate: privateVisibleNow === true,
       });
 
       // CRITICAL: DO NOT filter out empty private comments
