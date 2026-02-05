@@ -10,7 +10,7 @@ const { isSameComment } = require("../utils_copycode/isSameComment");
  * @returns {boolean} True if comment or any of its block lines have alwaysShow
  */
 function isAlwaysShow(comment) {
-  return comment.alwaysShow || (comment.block && comment.block.some((b) => b.alwaysShow));
+  return comment.alwaysShow;
 }
 
 async function updateAlwaysShowContext({ readBothVCMs, parseDocComs }) {
